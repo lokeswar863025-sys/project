@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Utensils, Star, Clock } from 'lucide-react';
-import { SAMPLE_MENU, MENU_CATEGORIES } from '../data/sampleMenu';
+const MENU_CATEGORIES = ['All', 'Starters', 'Mains', 'Desserts', 'Drinks'];
+const SAMPLE_MENU = [];
 import api from '../services/api';
 
 export default function MenuPage() {
