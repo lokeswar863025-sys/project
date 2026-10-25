@@ -1,0 +1,11 @@
+# Environment secrets
+.env
+.env.local
+
+# Node modules
+node_modules/
+
+# Database files
+data/
+*.db
+*.sqlite
