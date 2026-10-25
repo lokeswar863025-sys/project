@@ -2,8 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { getDb } from './db.js';
+import { getConfiguredAdminEmail, verifyFirebaseIdToken } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,28 +16,62 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+if (process.env.CORS_ORIGIN) {
+  app.use(cors({ origin: process.env.CORS_ORIGIN.split(',').map((value) => value.trim()) }));
+}
 app.use(express.json());
 
-// Helper: Extract Authenticated Customer User ID from Headers
-const getAuthUserId = (req) => {
-  const headerUserId = req.headers['x-user-id'] || req.headers['authorization'];
-  if (headerUserId && headerUserId !== 'undefined' && headerUserId !== 'null') {
-    return headerUserId.replace('Bearer ', '').trim();
+// Never treat browser-supplied IDs or role flags as proof of identity.
+const getAuthUserId = (req) => req.auth?.userId || null;
+const authenticate = asyncHandler(async (req, res, next) => {
+  const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token) return res.status(401).json({ success: false, message: 'Please sign in to continue.' });
+  try {
+    const claims = await verifyFirebaseIdToken(token);
+    const db = await getDb();
+    const user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
+    req.auth = {
+      claims,
+      userId: user?.id || claims.sub,
+      user,
+      isAdmin: Boolean(user && user.role === 'ADMIN' && claims.email?.toLowerCase() === getConfiguredAdminEmail())
+    };
+    next();
+  } catch (error) {
+    return res.status(401).json({ success: false, message: error.message || 'Sign-in could not be verified.' });
   }
-  return null;
-};
+});
+const requireAdmin = asyncHandler(async (req, res, next) => {
+  const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token) return res.status(401).json({ success: false, message: 'Administrator sign-in is required.' });
+  try {
+    const claims = await verifyFirebaseIdToken(token);
+    const adminEmail = getConfiguredAdminEmail();
+    if (!adminEmail || claims.email?.toLowerCase() !== adminEmail) {
+      return res.status(403).json({ success: false, message: 'This account is not configured as a restaurant administrator.' });
+    }
+    const db = await getDb();
+    const user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
+    if (!user || user.role !== 'ADMIN') return res.status(403).json({ success: false, message: 'Sign in with the configured administrator account first, then retry.' });
+    req.auth = { claims, userId: user.id, user, isAdmin: true };
+    next();
+  } catch (error) {
+    return res.status(401).json({ success: false, message: error.message || 'Administrator sign-in could not be verified.' });
+  }
+});
 
 // Helper: Convert time string e.g. "12:00 PM" or "11:30 AM" into minutes from midnight
 const parseTimeToMinutes = (timeStr) => {
-  if (!timeStr) return 720;
-  const parts = timeStr.trim().split(' ');
-  if (parts.length !== 2) return 720;
-  const [hhmm, period] = parts;
-  let [hours, minutes] = hhmm.split(':').map(Number);
-  if (period.toUpperCase() === 'PM' && hours !== 12) hours += 12;
-  if (period.toUpperCase() === 'AM' && hours === 12) hours = 0;
-  return hours * 60 + minutes;
+  if (typeof timeStr !== 'string') return Number.NaN;
+  const value = timeStr.trim();
+  const twentyFourHour = value.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (twentyFourHour) return Number(twentyFourHour[1]) * 60 + Number(twentyFourHour[2]);
+  const twelveHour = value.match(/^(0?[1-9]|1[0-2]):([0-5]\d)\s*(AM|PM)$/i);
+  if (!twelveHour) return Number.NaN;
+  let hours = Number(twelveHour[1]);
+  if (twelveHour[3].toUpperCase() === 'PM' && hours !== 12) hours += 12;
+  if (twelveHour[3].toUpperCase() === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + Number(twelveHour[2]);
 };
 
 // Helper: Parse integer number of guests from string e.g. "2 Guests" or 2
@@ -45,8 +81,17 @@ const parseGuestsCount = (guestStr) => {
   return isNaN(num) || num <= 0 ? 2 : num;
 };
 
+const isValidBookingDate = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value && value >= new Date().toISOString().slice(0, 10);
+};
+const isValidBookingTime = (value) => typeof value === 'string' &&
+  /^(?:(?:[01]?\d|2[0-3]):[0-5]\d|(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:AM|PM))$/i.test(value.trim());
+
 // Phase 13: Table Sharing Configuration (Defaults to true to allow partial capacity bookings)
 const TABLE_SHARING_ENABLED = process.env.TABLE_SHARING_ENABLED !== 'false';
+const TAX_RATE_PERCENT = Number.parseFloat(process.env.TAX_RATE_PERCENT || '5');
 
 // Phase 13: Unified Table Status Evaluator
 const evaluateTableCapacityAndStatus = (table, overlappingReservations, reqGuests) => {
@@ -133,50 +178,39 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 // ==================== AUTH & USER PROFILE APIs ====================
 
 app.post('/api/auth', asyncHandler(async (req, res) => {
-  const { id, googleId, name, email, photo, role } = req.body;
-  const rawMobile = req.body.mobileNumber || req.body.mobile_number || req.body.mobile || req.body.phone;
-  const cleanMobile = rawMobile ? String(rawMobile).replace(/[^0-9]/g, '').slice(-10) : null;
-
-  if (!email && !cleanMobile) {
-    return res.status(400).json({ success: false, message: 'Mobile number or email address is required for customer authentication.' });
+  let claims;
+  try {
+    claims = await verifyFirebaseIdToken(req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]);
+  } catch (error) {
+    const status = error.message.includes('not configured') ? 503 : 401;
+    return res.status(status).json({ success: false, message: error.message });
   }
-
-  const userEmail = email ? email.trim() : (cleanMobile ? `${cleanMobile}@customer.nowait.local` : `user_${Date.now()}@customer.nowait.local`);
-
   const db = await getDb();
-  let userRecord = null;
-  if (cleanMobile) {
-    userRecord = await db.get('SELECT * FROM users WHERE mobile_number = ?', [cleanMobile]);
-  }
-  if (!userRecord && email) {
-    userRecord = await db.get('SELECT * FROM users WHERE email = ?', [email.trim()]);
-  }
+  const email = claims.email.toLowerCase();
+  const configuredAdmin = Boolean(getConfiguredAdminEmail()) && email === getConfiguredAdminEmail();
+  let user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
+  if (!user) user = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [email]);
 
-  if (userRecord) {
-    if (cleanMobile || photo || name) {
-      await db.run(
-        `UPDATE users SET name = COALESCE(?, name), mobile_number = COALESCE(?, mobile_number), photo = COALESCE(?, photo), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-        [name || null, cleanMobile || userRecord.mobile_number, photo || null, userRecord.id]
-      );
-      userRecord = await db.get('SELECT * FROM users WHERE id = ?', [userRecord.id]);
-    }
-    return res.json({ success: true, data: userRecord });
+  if (user) {
+    await db.run(
+      `UPDATE users SET google_id = ?, name = ?, email = ?, photo = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [claims.sub, claims.name || user.name || 'Customer', email, claims.picture || user.photo || '', configuredAdmin ? 'ADMIN' : 'CUSTOMER', user.id]
+    );
+    user = await db.get('SELECT id, google_id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [user.id]);
+    return res.json({ success: true, data: user });
   }
 
-  const userId = id || (cleanMobile ? `user-${cleanMobile}` : `user-${Date.now()}`);
-  const userRole = role || (userEmail.includes('admin') ? 'ADMIN' : 'CUSTOMER');
-
+  const userId = claims.sub;
   await db.run(
-    `INSERT INTO users (id, google_id, name, email, mobile_number, photo, role) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [userId, googleId || null, name || 'Customer Diner', userEmail, cleanMobile, photo || '', userRole]
+    `INSERT INTO users (id, google_id, name, email, photo, role) VALUES (?, ?, ?, ?, ?, ?)`,
+    [userId, claims.sub, claims.name || 'Customer', email, claims.picture || '', configuredAdmin ? 'ADMIN' : 'CUSTOMER']
   );
-
-  const newUser = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
-  res.status(201).json({ success: true, data: newUser });
+  user = await db.get('SELECT id, google_id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [userId]);
+  res.status(201).json({ success: true, data: user });
 }));
 
-app.patch('/api/users/profile', asyncHandler(async (req, res) => {
-  const userId = getAuthUserId(req) || req.body.userId;
+app.patch('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
+  const userId = getAuthUserId(req);
   const { name, mobileNumber } = req.body;
 
   if (!userId) {
@@ -208,8 +242,8 @@ app.patch('/api/users/profile', asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Profile updated successfully.', data: updatedUser });
 }));
 
-app.get('/api/users/profile', asyncHandler(async (req, res) => {
-  const userId = getAuthUserId(req) || req.query.userId;
+app.get('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
+  const userId = getAuthUserId(req);
   if (!userId) {
     return res.status(401).json({ success: false, message: 'Unauthorized customer access.' });
   }
@@ -232,13 +266,17 @@ app.get('/api/tables/availability', asyncHandler(async (req, res) => {
   const { date, time, arrivalTime, leavingTime, guests = 2, durationHours = 2 } = req.query;
   const targetDate = date || new Date().toISOString().split('T')[0];
   const numGuests = parseGuestsCount(guests);
-  const durationMins = (parseFloat(durationHours) || 2) * 60;
-
   const reqArrivalStr = arrivalTime || time || '11:30 AM';
+  const duration = Number.parseFloat(durationHours);
+  if (!isValidBookingDate(targetDate) || !isValidBookingTime(reqArrivalStr) || (leavingTime && !isValidBookingTime(leavingTime)) ||
+      !Number.isFinite(duration) || duration <= 0 || duration > 8 || numGuests < 1 || numGuests > 20) {
+    return res.status(400).json({ success: false, message: 'Provide a future date, valid time, party size (1–20), and duration (up to 8 hours).' });
+  }
+  const durationMins = duration * 60;
   const reqStart = parseTimeToMinutes(reqArrivalStr);
   let reqEnd = leavingTime ? parseTimeToMinutes(leavingTime) : reqStart + durationMins;
   if (reqEnd <= reqStart) {
-    reqEnd = reqStart + durationMins;
+    return res.status(400).json({ success: false, message: 'Departure time must be after arrival time.' });
   }
 
   const db = await getDb();
@@ -372,7 +410,7 @@ app.get('/api/menu/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, data: item });
 }));
 
-app.post('/api/menu', asyncHandler(async (req, res) => {
+app.post('/api/menu', requireAdmin, asyncHandler(async (req, res) => {
   const { name, description, category, price, image } = req.body;
   if (!name || !price) {
     return res.status(400).json({ success: false, message: 'Missing required menu item fields (name, price).' });
@@ -392,7 +430,7 @@ app.post('/api/menu', asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: newItem });
 }));
 
-app.patch('/api/menu/:id', asyncHandler(async (req, res) => {
+app.patch('/api/menu/:id', requireAdmin, asyncHandler(async (req, res) => {
   const db = await getDb();
   const item = await db.get('SELECT * FROM menu_items WHERE id = ?', [req.params.id]);
 
@@ -416,7 +454,7 @@ app.patch('/api/menu/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, data: updatedItem });
 }));
 
-app.delete('/api/menu/:id', asyncHandler(async (req, res) => {
+app.delete('/api/menu/:id', requireAdmin, asyncHandler(async (req, res) => {
   const db = await getDb();
   const item = await db.get('SELECT * FROM menu_items WHERE id = ?', [req.params.id]);
 
@@ -429,27 +467,35 @@ app.delete('/api/menu/:id', asyncHandler(async (req, res) => {
 }));
 
 // ==================== RESERVATIONS APIs WITH RACE-CONDITION & CAPACITY PROTECTION ====================
-app.post('/api/reservations', asyncHandler(async (req, res) => {
+app.post('/api/reservations', authenticate, asyncHandler(async (req, res) => {
   const authUserId = getAuthUserId(req);
   const tableId = req.body.tableId || req.body.table_id;
   const date = req.body.date;
   const time = req.body.time;
   const leavingTime = req.body.leavingTime || req.body.leaving_time;
   const guests = req.body.guests;
-  const customerName = req.body.customerName || req.body.customer_name;
-  const customerEmail = req.body.customerEmail || req.body.customer_email;
+  const customerName = req.auth.claims.name || req.auth.user?.name || 'Customer';
+  const customerEmail = req.auth.claims.email || '';
   const customerMobile = req.body.customerMobile || req.body.customer_mobile;
-  const userId = authUserId || req.body.userId || req.body.user_id;
+  const userId = authUserId;
 
   if (!tableId || !date || !time) {
     return res.status(400).json({ success: false, message: 'Missing required reservation parameters (tableId, date, time).' });
   }
 
+  if (!isValidBookingDate(date) || !isValidBookingTime(time) || (leavingTime && !isValidBookingTime(leavingTime))) {
+    return res.status(400).json({ success: false, message: 'Choose a valid booking date (today or later) and valid arrival/departure times.' });
+  }
+
+  const guestDigits = String(guests ?? '').match(/\d+/)?.[0];
   const reqGuests = parseGuestsCount(guests);
+  if (!guestDigits || !Number.isInteger(reqGuests) || reqGuests < 1 || reqGuests > 20) {
+    return res.status(400).json({ success: false, message: 'Party size must be between 1 and 20 guests.' });
+  }
   const reqStart = parseTimeToMinutes(time);
   let reqEnd = leavingTime ? parseTimeToMinutes(leavingTime) : reqStart + 120;
   if (reqEnd <= reqStart) {
-    reqEnd = reqStart + 120;
+    return res.status(400).json({ success: false, message: 'Departure time must be after arrival time.' });
   }
 
   const db = await getDb();
@@ -501,20 +547,8 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
     });
   }
 
-  const resId = `NW-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-  const finalUserId = authUserId || userId || 'guest-user';
-
-  // Ensure customer profile exists in users table
-  if (finalUserId && finalUserId !== 'guest-user') {
-    const existingUser = await db.get('SELECT * FROM users WHERE id = ?', [finalUserId]);
-    if (!existingUser) {
-      const userEmail = customerEmail || (customerMobile ? `${customerMobile}@customer.nowait.local` : `${finalUserId}@customer.nowait.local`);
-      await db.run(
-        `INSERT INTO users (id, name, email, mobile_number, role) VALUES (?, ?, ?, ?, 'CUSTOMER')`,
-        [finalUserId, customerName || 'Valued Diner', userEmail, customerMobile || '']
-      );
-    }
-  }
+  const resId = `RES-${randomUUID()}`;
+  const finalUserId = userId;
 
   await db.run(
     `INSERT INTO reservations (id, user_id, restaurant_id, table_id, customer_name, customer_email, customer_mobile, date, time, leaving_time, guests, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -525,44 +559,28 @@ app.post('/api/reservations', asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: newRes });
 }));
 
-app.get('/api/reservations/my-reservations', asyncHandler(async (req, res) => {
-  const authUserId = getAuthUserId(req) || req.query.userId;
+app.get('/api/reservations/my-reservations', authenticate, asyncHandler(async (req, res) => {
+  const authUserId = getAuthUserId(req);
   if (!authUserId) {
     return res.status(401).json({ success: false, message: 'Unauthorized: Authentication required to view reservation history.' });
   }
 
-  const cleanMobile = authUserId.replace(/[^0-9]/g, '').slice(-10);
-
   const db = await getDb();
-  let rows;
-  if (cleanMobile && cleanMobile.length === 10) {
-    rows = await db.all(
-      `SELECT r.*, t.table_number, t.capacity, t.qr_code FROM reservations r LEFT JOIN tables t ON r.table_id = t.id WHERE r.user_id = ? OR r.customer_mobile = ? ORDER BY r.created_at DESC`,
-      [authUserId, cleanMobile]
-    );
-  } else {
-    rows = await db.all(
-      `SELECT r.*, t.table_number, t.capacity, t.qr_code FROM reservations r LEFT JOIN tables t ON r.table_id = t.id WHERE r.user_id = ? ORDER BY r.created_at DESC`,
-      [authUserId]
-    );
-  }
+  const rows = await db.all(
+    `SELECT r.*, t.table_number, t.capacity, t.qr_code FROM reservations r LEFT JOIN tables t ON r.table_id = t.id WHERE r.user_id = ? ORDER BY r.created_at DESC`,
+    [authUserId]
+  );
 
   res.json({ success: true, data: rows });
 }));
 
-app.get('/api/reservations', asyncHandler(async (req, res) => {
-  const authUserId = getAuthUserId(req) || req.query.userId;
+app.get('/api/reservations', requireAdmin, asyncHandler(async (req, res) => {
   const db = await getDb();
-
-  const sql = authUserId
-    ? `SELECT r.*, t.table_number, t.capacity FROM reservations r LEFT JOIN tables t ON r.table_id = t.id WHERE r.user_id = ? ORDER BY r.created_at DESC`
-    : `SELECT r.*, t.table_number, t.capacity FROM reservations r LEFT JOIN tables t ON r.table_id = t.id ORDER BY r.created_at DESC`;
-
-  const rows = await db.all(sql, authUserId ? [authUserId] : []);
+  const rows = await db.all(`SELECT r.*, t.table_number, t.capacity FROM reservations r LEFT JOIN tables t ON r.table_id = t.id ORDER BY r.created_at DESC`);
   res.json({ success: true, data: rows });
 }));
 
-app.delete('/api/reservations/:id', asyncHandler(async (req, res) => {
+app.delete('/api/reservations/:id', authenticate, asyncHandler(async (req, res) => {
   const authUserId = getAuthUserId(req);
   const db = await getDb();
   const reservation = await db.get('SELECT * FROM reservations WHERE id = ?', [req.params.id]);
@@ -571,7 +589,7 @@ app.delete('/api/reservations/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: `Reservation '${req.params.id}' not found.` });
   }
 
-  if (authUserId && reservation.user_id !== authUserId && req.headers['x-admin-token'] !== 'admin-secret') {
+  if (reservation.user_id !== authUserId && !(req.auth.isAdmin && req.auth.user?.role === 'ADMIN')) {
     return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to modify this reservation.' });
   }
 
@@ -581,15 +599,15 @@ app.delete('/api/reservations/:id', asyncHandler(async (req, res) => {
 
 // ==================== ORDERS & PAYMENTS APIs WITH RESERVATION RESTRICTIONS ====================
 
-app.post('/api/orders', asyncHandler(async (req, res) => {
+app.post('/api/orders', authenticate, asyncHandler(async (req, res) => {
   const authUserId = getAuthUserId(req);
   const tableId = req.body.tableId || req.body.table_id;
   const reservationId = req.body.reservationId || req.body.reservation_id;
   const items = req.body.items;
-  const userId = req.body.userId || req.body.user_id;
-  const customerName = req.body.customerName || req.body.customer_name;
-  const customerEmail = req.body.customerEmail || req.body.customer_email;
-  const customerMobile = req.body.customerMobile || req.body.customer_mobile;
+  const userId = getAuthUserId(req);
+  const customerName = req.auth.claims.name || req.auth.user?.name || 'Customer';
+  const customerEmail = req.auth.claims.email;
+  const customerMobile = req.auth.user?.mobile_number || '';
   const finalUserId = authUserId || userId;
 
   if (!finalUserId) {
@@ -651,7 +669,10 @@ app.post('/api/orders', asyncHandler(async (req, res) => {
 
     const unitPriceNumeric = dbItem.price_numeric;
     const itemName = dbItem.name;
-    const quantity = Math.max(1, parseInt(cartItem.quantity, 10) || 1);
+    const quantity = Number(cartItem.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 50) {
+      return res.status(400).json({ success: false, message: `Quantity for '${dbItem.name}' must be a whole number from 1 to 50.` });
+    }
 
     const lineTotalNumeric = unitPriceNumeric * quantity;
     serverSubtotal += lineTotalNumeric;
@@ -666,15 +687,15 @@ app.post('/api/orders', asyncHandler(async (req, res) => {
     });
   }
 
-  const serverTaxNumeric = Math.round(serverSubtotal * 0.05);
+  const taxRatePercent = Number.isFinite(TAX_RATE_PERCENT) && TAX_RATE_PERCENT >= 0 && TAX_RATE_PERCENT <= 100 ? TAX_RATE_PERCENT : 5;
+  const serverTaxNumeric = Math.round(serverSubtotal * taxRatePercent / 100);
   const serverTotalNumeric = serverSubtotal + serverTaxNumeric;
 
-  const orderId = `NW-${Math.floor(1000 + Math.random() * 9000)}`;
+  const orderId = `NW-${randomUUID().toUpperCase()}`;
 
   const dateStamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-  const payRandom = Math.floor(1000 + Math.random() * 9000);
-  const paymentReference = `NW-PAY-${dateStamp}-${payRandom}`;
-  const paymentId = `pay-${Date.now()}-${payRandom}`;
+  const paymentReference = `NW-PAY-${dateStamp}-${randomUUID().slice(0, 10).toUpperCase()}`;
+  const paymentId = `pay-${randomUUID()}`;
 
   await db.run(
     `INSERT INTO orders (id, user_id, restaurant_id, table_id, reservation_id, customer_name, customer_email, customer_mobile, payment_id, payment_reference, payment_status, status, subtotal, tax, total, total_numeric) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -722,8 +743,6 @@ app.post('/api/orders', asyncHandler(async (req, res) => {
     ]
   );
 
-  const upiPayload = `upi://pay?pa=nowaitrestaurant@upi&pn=NO-WAIT RESTAURANT&am=${serverTotalNumeric}&tr=${paymentReference}&cu=INR`;
-
   const newOrder = await db.get('SELECT * FROM orders WHERE id = ?', [orderId]);
   const paymentRecord = await db.get('SELECT * FROM payments WHERE id = ?', [paymentId]);
 
@@ -732,13 +751,12 @@ app.post('/api/orders', asyncHandler(async (req, res) => {
     data: {
       ...newOrder,
       items: validatedItems,
-      payment: paymentRecord,
-      upiPayload
+      payment: paymentRecord
     }
   });
 }));
 
-app.get('/api/payments/:paymentId', asyncHandler(async (req, res) => {
+app.get('/api/payments/:paymentId', authenticate, asyncHandler(async (req, res) => {
   const authUserId = getAuthUserId(req);
   const db = await getDb();
 
@@ -749,7 +767,7 @@ app.get('/api/payments/:paymentId', asyncHandler(async (req, res) => {
 
   const order = await db.get('SELECT * FROM orders WHERE id = ?', [payment.order_id]);
 
-  if (authUserId && payment.user_id !== authUserId && req.headers['x-admin-token'] !== 'admin-secret') {
+  if (payment.user_id !== authUserId && !(req.auth.isAdmin && req.auth.user?.role === 'ADMIN')) {
     return res.status(403).json({ success: false, message: '403 Forbidden: Access denied.' });
   }
 
@@ -762,50 +780,21 @@ app.get('/api/payments/:paymentId', asyncHandler(async (req, res) => {
   });
 }));
 
-app.post('/api/payments/:paymentId/verify', asyncHandler(async (req, res) => {
-  const { action } = req.body;
-  const db = await getDb();
-
-  const payment = await db.get('SELECT * FROM payments WHERE id = ? OR payment_reference = ?', [req.params.paymentId, req.params.paymentId]);
-  if (!payment) {
-    return res.status(404).json({ success: false, message: 'Payment record not found.' });
-  }
-
-  const isProviderConfigured = process.env.PAYMENT_KEY_ID && process.env.PAYMENT_KEY_SECRET;
-
-  if (action === 'MARK_PAID' || isProviderConfigured) {
-    await db.run(`UPDATE payments SET status = 'PAID', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [payment.id]);
-    await db.run(`UPDATE orders SET payment_status = 'PAID', status = 'CONFIRMED', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [payment.order_id]);
-
-    const updatedPayment = await db.get('SELECT * FROM payments WHERE id = ?', [payment.id]);
-    const updatedOrder = await db.get('SELECT * FROM orders WHERE id = ?', [payment.order_id]);
-
-    return res.json({
-      success: true,
-      message: 'Payment verified and marked as PAID.',
-      data: {
-        payment: updatedPayment,
-        order: updatedOrder
-      }
-    });
-  }
-
-  res.json({
-    success: true,
-    status: payment.status,
-    isProviderConfigured: false,
-    message: 'REAL PAYMENT VERIFICATION IS NOT YET ENABLED — PAYMENT PROVIDER CONFIGURATION IS REQUIRED.',
-    data: payment
+app.post('/api/payments/:paymentId/verify', authenticate, asyncHandler(async (req, res) => {
+  // A browser request cannot prove that money was received. A real payment
+  // provider and verification of its signed webhook are required for this.
+  return res.status(501).json({
+    success: false,
+    message: 'Online payment verification is not configured. Do not treat a screenshot or browser confirmation as proof of payment.'
   });
 }));
 
 app.post('/api/payments/webhook', asyncHandler(async (req, res) => {
-  console.log('[Payment Webhook Received]', req.body);
-  res.json({ received: true });
+  return res.status(501).json({ success: false, message: 'No payment provider webhook is configured.' });
 }));
 
-app.get('/api/orders/my-orders', asyncHandler(async (req, res) => {
-  const authUserId = getAuthUserId(req) || req.query.userId;
+app.get('/api/orders/my-orders', authenticate, asyncHandler(async (req, res) => {
+  const authUserId = getAuthUserId(req);
   const { status, search, page = 1, limit = 10 } = req.query;
 
   if (!authUserId) {
@@ -828,9 +817,11 @@ app.get('/api/orders/my-orders', asyncHandler(async (req, res) => {
 
   sql += ` ORDER BY o.created_at DESC`;
 
-  const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const safeLimit = Math.min(50, Math.max(1, Number.parseInt(limit, 10) || 10));
+  const offset = (safePage - 1) * safeLimit;
   sql += ` LIMIT ? OFFSET ?`;
-  params.push(parseInt(limit, 10), offset);
+  params.push(safeLimit, offset);
 
   const orders = await db.all(sql, params);
 
@@ -853,11 +844,11 @@ app.get('/api/orders/my-orders', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: result,
-    pagination: { page: parseInt(page, 10), limit: parseInt(limit, 10) }
+    pagination: { page: safePage, limit: safeLimit }
   });
 }));
 
-app.get('/api/orders/:id', asyncHandler(async (req, res) => {
+app.get('/api/orders/:id', authenticate, asyncHandler(async (req, res) => {
   const authUserId = getAuthUserId(req);
   const db = await getDb();
 
@@ -870,8 +861,7 @@ app.get('/api/orders/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: `Order '${req.params.id}' not found.` });
   }
 
-  const isAdmin = req.headers['x-admin-token'] === 'admin-secret';
-  if (authUserId && order.user_id !== authUserId && !isAdmin) {
+  if (order.user_id !== authUserId && !(req.auth.isAdmin && req.auth.user?.role === 'ADMIN')) {
     return res.status(403).json({
       success: false,
       message: '403 Forbidden: Access denied. You do not have permission to view this order.'
@@ -896,8 +886,8 @@ app.get('/api/orders/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-app.patch('/api/orders/:id', asyncHandler(async (req, res) => {
-  const { status, payment_status } = req.body;
+app.patch('/api/orders/:id', requireAdmin, asyncHandler(async (req, res) => {
+  const { status } = req.body;
   const db = await getDb();
 
   const order = await db.get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
@@ -905,9 +895,8 @@ app.patch('/api/orders/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: `Order '${req.params.id}' not found.` });
   }
 
-  await db.run('UPDATE orders SET status = ?, payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+  await db.run('UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
     status || order.status,
-    payment_status || order.payment_status,
     req.params.id
   ]);
   const updated = await db.get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
@@ -916,50 +905,13 @@ app.patch('/api/orders/:id', asyncHandler(async (req, res) => {
 }));
 
 // ==================== OWNER / ADMIN AUTHENTICATION API ====================
-app.post('/api/owner/login', asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Owner email and password are required.' });
-  }
-
-  const db = await getDb();
-  const normalizedEmail = email.trim().toLowerCase();
-  
-  // Find owner user by email
-  const user = await db.get(
-    "SELECT * FROM users WHERE LOWER(email) = ? AND (role = 'ADMIN' OR role = 'STAFF')",
-    [normalizedEmail]
-  );
-
-  if (!user) {
-    return res.status(401).json({ success: false, message: 'Invalid owner credentials or unauthorized role.' });
-  }
-
-  // Validate password (supports hashed or seeded plain text)
-  const isPasswordValid = user.password === password || password === 'owner123' || password === 'admin123';
-  if (!isPasswordValid) {
-    return res.status(401).json({ success: false, message: 'Invalid password. Please check your owner credentials.' });
-  }
-
-  const ownerToken = `owner_token_${user.id}_${Date.now()}`;
-
-  res.json({
-    success: true,
-    message: 'Owner authentication successful.',
-    data: {
-      token: ownerToken,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        photo: user.photo
-      }
-    }
-  });
+app.post('/api/owner/login', (req, res) => res.status(410).json({
+  success: false,
+  message: 'Password-only owner login has been removed. Sign in with the configured Firebase administrator account.'
 }));
 
 // ==================== COMPREHENSIVE ADMIN MANAGEMENT APIs ====================
+app.use('/api/admin', requireAdmin);
 
 // 1. Overview Dashboard Statistics (Real Database Metrics)
 app.get('/api/admin/stats', asyncHandler(async (req, res) => {
@@ -980,8 +932,8 @@ app.get('/api/admin/stats', asyncHandler(async (req, res) => {
 
   const totalCustomersRow = await db.get("SELECT COUNT(*) as c FROM users WHERE role = 'CUSTOMER'");
   
-  const revenueRow = await db.get("SELECT SUM(total_numeric) as sum FROM orders WHERE payment_status = 'PAID' OR status = 'COMPLETED'");
-  const todayRevenueRow = await db.get("SELECT SUM(total_numeric) as sum FROM orders WHERE (payment_status = 'PAID' OR status = 'COMPLETED') AND (date(created_at) = date('now') OR date(created_at) = ?)", [todayStr]);
+  const revenueRow = await db.get("SELECT SUM(total_numeric) as sum FROM orders WHERE payment_status = 'PAID'");
+  const todayRevenueRow = await db.get("SELECT SUM(total_numeric) as sum FROM orders WHERE payment_status = 'PAID' AND (date(created_at) = date('now') OR date(created_at) = ?)", [todayStr]);
 
   const totalRevenue = revenueRow?.sum || 0;
   const todayRevenue = todayRevenueRow?.sum || 0;
@@ -1119,9 +1071,9 @@ app.get('/api/admin/orders', asyncHandler(async (req, res) => {
 
 // 5. Update Order Status
 app.patch('/api/admin/orders/:id/status', asyncHandler(async (req, res) => {
-  const { status, payment_status } = req.body;
-  if (!status && !payment_status) {
-    return res.status(400).json({ success: false, message: 'Status or payment_status required.' });
+  const { status } = req.body;
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'Order status is required.' });
   }
 
   const db = await getDb();
@@ -1130,12 +1082,9 @@ app.patch('/api/admin/orders/:id/status', asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: `Order '${req.params.id}' not found.` });
   }
 
-  const newStatus = status || order.status;
-  const newPaymentStatus = payment_status || order.payment_status;
-
   await db.run(
-    "UPDATE orders SET status = ?, payment_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    [newStatus, newPaymentStatus, req.params.id]
+    "UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [status, req.params.id]
   );
 
   const updated = await db.get("SELECT * FROM orders WHERE id = ?", [req.params.id]);

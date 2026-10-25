@@ -1,16 +1,33 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { signOut, onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { auth, googleProvider } from '../config/firebase';
 import api from '../services/api';
 
-const AuthContext = createContext();
-
+const AuthContext = createContext(null);
+const profileSyncs = new Map();
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
+}
+
+const mapUser = (profile) => ({
+  uid: profile.id,
+  id: profile.id,
+  displayName: profile.name,
+  email: profile.email,
+  mobile: profile.mobile_number || '',
+  photoURL: profile.photo || '',
+  role: profile.role
+});
+
+function syncFirebaseUser(firebaseUser) {
+  if (!profileSyncs.has(firebaseUser.uid)) {
+    const sync = api.authenticateUser().then((response) => mapUser(response.data))
+      .finally(() => profileSyncs.delete(firebaseUser.uid));
+    profileSyncs.set(firebaseUser.uid, sync);
+  }
+  return profileSyncs.get(firebaseUser.uid);
 }
 
 export function AuthProvider({ children }) {
@@ -18,125 +35,60 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
 
-  // Monitor Auth State & load persisted customer session
-  useEffect(() => {
+  useEffect(() => onAuthStateChanged(auth, async (firebaseUser) => {
+    if (!firebaseUser) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const savedUser = localStorage.getItem('no_wait_customer_user');
-      if (savedUser) {
-        setUser(JSON.parse(savedUser));
-      }
-    } catch (e) {}
+      setUser(await syncFirebaseUser(firebaseUser));
+      setAuthError(null);
+    } catch (error) {
+      setUser(null);
+      setAuthError(error.message || 'Could not verify your account.');
+      await signOut(auth);
+    } finally {
+      setLoading(false);
+    }
+  }, (error) => {
+    setAuthError(error.message || 'Sign-in could not be checked.');
+    setLoading(false);
+  }), []);
 
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        if (currentUser) {
-          setUser(currentUser);
-        }
-        setLoading(false);
-      },
-      (error) => {
-        console.warn('Auth State listener warning:', error.message);
-        setLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, []);
-
-  // Customer Name & Mobile Sign-In Handler (Gmail removed from requirements)
-  const loginUser = async (param1, param2, param3) => {
+  const loginUser = async () => {
     setAuthError(null);
     setLoading(true);
-
-    let displayName = '';
-    let email = '';
-    let mobile = '';
-
-    if (param3 !== undefined) {
-      // Legacy 3-arg call: (customEmail, customName, customMobile)
-      email = param1?.trim() || '';
-      displayName = param2?.trim() || email.split('@')[0];
-      mobile = param3?.trim() || '';
-    } else {
-      // New 2-arg call: (customName, customMobile)
-      displayName = param1?.trim() || 'Valued Diner';
-      mobile = param2?.trim() || '';
-      const cleanDigits = mobile.replace(/[^0-9]/g, '').slice(-10);
-      email = cleanDigits ? `${cleanDigits}@customer.nowait.local` : 'customer@nowait.local';
-    }
-
-    const cleanMobile = mobile.replace(/[^0-9]/g, '').slice(-10);
-    const userId = cleanMobile ? `user-${cleanMobile}` : `user-${Date.now()}`;
-
-    const customerUser = {
-      uid: userId,
-      id: userId,
-      displayName,
-      email: email || (cleanMobile ? `${cleanMobile}@customer.nowait.local` : 'customer@nowait.local'),
-      mobile: cleanMobile || '9876543210',
-      photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-      providerId: 'customer-mobile'
-    };
-
-    // Sync customer user with SQLite database
     try {
-      const dbRes = await api.authenticateUser({
-        id: userId,
-        name: displayName,
-        mobileNumber: cleanMobile,
-        email: customerUser.email,
-        role: 'CUSTOMER'
-      });
-      if (dbRes?.data?.id) {
-        customerUser.uid = dbRes.data.id;
-        customerUser.id = dbRes.data.id;
-        customerUser.displayName = dbRes.data.name || displayName;
-        customerUser.email = dbRes.data.email || customerUser.email;
-        customerUser.mobile = dbRes.data.mobile_number || customerUser.mobile;
-      }
-    } catch (e) {
-      console.warn('Backend customer sync warning:', e.message);
+      await signInWithPopup(auth, googleProvider);
+      const firebaseUser = auth.currentUser;
+      if (!firebaseUser) throw new Error('Google sign-in did not return an account.');
+      const appUser = await syncFirebaseUser(firebaseUser);
+      setUser(appUser);
+      setLoading(false);
+      return appUser;
+    } catch (error) {
+      setAuthError(error.message || 'Google sign-in failed.');
+      setLoading(false);
+      return null;
     }
-
-    try {
-      localStorage.setItem('no_wait_customer_user', JSON.stringify(customerUser));
-    } catch (e) {}
-
-    setUser(customerUser);
-    setLoading(false);
-    return customerUser;
   };
 
-  // Backward compatibility alias for loginWithGoogle
-  const loginWithGoogle = (email, name, mobile) => loginUser(email, name, mobile);
-
-  // Logout Handler
   const logout = async () => {
     setLoading(true);
     try {
-      localStorage.removeItem('no_wait_customer_user');
       await signOut(auth);
-    } catch (err) {
-      console.warn('Sign-Out error:', err);
-    } finally {
       setUser(null);
-      setLoading(false);
       setAuthError(null);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const clearError = () => setAuthError(null);
-
-  const value = {
-    user,
-    loading,
-    error: authError,
-    loginUser,
-    loginWithGoogle,
-    logout,
-    clearError
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, loading, error: authError, loginUser, loginWithGoogle: loginUser, logout, clearError: () => setAuthError(null) }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }

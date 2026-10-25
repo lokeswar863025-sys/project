@@ -1,3 +1,5 @@
+import { auth } from '../config/firebase';
+
 const API_BASE_URL = '/api';
 
 /**
@@ -10,9 +12,8 @@ export async function apiRequest(endpoint, method = 'GET', body = null, userId =
     ...customHeaders
   };
 
-  if (userId) {
-    headers['x-user-id'] = userId;
-  }
+  const firebaseUser = auth.currentUser;
+  if (firebaseUser) headers.Authorization = `Bearer ${await firebaseUser.getIdToken()}`;
 
   const config = {
     method,
@@ -94,13 +95,10 @@ export const api = {
 
   // Phase 13: Owner Table Control APIs
   getAdminTables: (date = '', time = '') =>
-    apiRequest(`/admin/tables?date=${encodeURIComponent(date)}&time=${encodeURIComponent(time)}`, 'GET', null, null, { 'x-admin-token': 'admin-secret' }),
-  createAdminTable: (tableData) =>
-    apiRequest('/admin/tables', 'POST', tableData, null, { 'x-admin-token': 'admin-secret' }),
-  updateAdminTable: (id, tableData) =>
-    apiRequest(`/admin/tables/${id}`, 'PATCH', tableData, null, { 'x-admin-token': 'admin-secret' }),
-  deleteAdminTable: (id) =>
-    apiRequest(`/admin/tables/${id}`, 'DELETE', null, null, { 'x-admin-token': 'admin-secret' })
+    apiRequest(`/admin/tables?date=${encodeURIComponent(date)}&time=${encodeURIComponent(time)}`),
+  createAdminTable: (tableData) => apiRequest('/admin/tables', 'POST', tableData),
+  updateAdminTable: (id, tableData) => apiRequest(`/admin/tables/${id}`, 'PATCH', tableData),
+  deleteAdminTable: (id) => apiRequest(`/admin/tables/${id}`, 'DELETE')
 };
 
 export default api;

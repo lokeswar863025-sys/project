@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '../../services/api';
 import FadeUp from '../../components/animations/FadeUp';
+import { useAuth } from '../../context/AuthContext';
 
 const OWNER_SIDEBAR_TABS = [
   { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
@@ -24,6 +25,7 @@ const OWNER_SIDEBAR_TABS = [
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -97,8 +99,7 @@ export default function AdminDashboardPage() {
   });
 
   // Owner Profile
-  const storedOwnerUserStr = localStorage.getItem('nowait_owner_user');
-  const ownerUser = storedOwnerUserStr ? JSON.parse(storedOwnerUserStr) : { name: 'Restaurant Owner', email: 'owner@nowait.local' };
+  const ownerUser = { name: user?.displayName || 'Restaurant Owner', email: user?.email || '' };
 
   // Phase 13: Load Admin Tables with Real Seating Breakdown for Date & Time
   const loadAdminTables = async (date = adminTableDate, time = adminTableTime) => {
@@ -161,10 +162,9 @@ export default function AdminDashboardPage() {
   }, [activeTab, adminTableDate, adminTableTime]);
 
   // Handle Logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (window.confirm('Are you sure you want to log out of the Owner Dashboard?')) {
-      localStorage.removeItem('nowait_owner_token');
-      localStorage.removeItem('nowait_owner_user');
+      await logout();
       navigate('/owner/login');
     }
   };

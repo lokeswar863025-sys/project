@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { UtensilsCrossed, ShieldCheck, AlertCircle, Loader2, User, Phone, ArrowRight } from 'lucide-react';
+import { UtensilsCrossed, ShieldCheck, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function LoginPage() {
@@ -11,11 +11,6 @@ export default function LoginPage() {
 
   const from = location.state?.from?.pathname || '/';
 
-  // Form Inputs: Name, Mobile Number (Gmail removed)
-  const [customerName, setCustomerName] = useState('');
-  const [customerMobile, setCustomerMobile] = useState('');
-  const [inputError, setInputError] = useState('');
-
   // If user is already authenticated, redirect
   React.useEffect(() => {
     if (user) {
@@ -23,24 +18,8 @@ export default function LoginPage() {
     }
   }, [user, navigate, from]);
 
-  const handleSignInSubmit = async (e) => {
-    e.preventDefault();
-    setInputError('');
-
-    if (!customerName.trim()) {
-      setInputError('Please enter your Full Name.');
-      return;
-    }
-    const cleanDigits = customerMobile.replace(/[^0-9]/g, '');
-    if (!cleanDigits || cleanDigits.length < 10) {
-      setInputError('Please enter a valid 10-digit Mobile Number.');
-      return;
-    }
-
-    const loggedInUser = await loginUser(customerName.trim(), cleanDigits);
-    if (loggedInUser) {
-      navigate(from, { replace: true });
-    }
+  const handleSignIn = async () => {
+    if (await loginUser()) navigate(from, { replace: true });
   };
 
   return (
@@ -64,11 +43,11 @@ export default function LoginPage() {
 
         {/* Subtitle */}
         <p className="mt-2 text-sm text-[#A1A1A1] leading-relaxed">
-          Enter your full name and mobile number to continue.
+          Sign in securely with your Google account to book tables and manage orders.
         </p>
 
         {/* Error Alerts */}
-        {(error || inputError) && (
+        {error && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
@@ -76,10 +55,9 @@ export default function LoginPage() {
           >
             <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <span>{inputError || error}</span>
+              <span>{error}</span>
               <button
                 onClick={() => {
-                  setInputError('');
                   clearError();
                 }}
                 className="block mt-1 text-[11px] underline font-bold hover:text-white"
@@ -90,39 +68,12 @@ export default function LoginPage() {
           </motion.div>
         )}
 
-        {/* MANDATORY CUSTOMER FORM: NAME & MOBILE NUMBER */}
-        <form onSubmit={handleSignInSubmit} className="mt-6 space-y-4 text-left font-mono text-xs">
-          <div>
-            <label className="block text-[#A1A1A1] mb-2 uppercase flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-[#FF4D00]" /> Full Name <span className="text-rose-400">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              className="w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[#A1A1A1] mb-2 uppercase flex items-center gap-1.5">
-              <Phone className="w-3.5 h-3.5 text-[#FF4D00]" /> Mobile Number <span className="text-rose-400">*</span>
-            </label>
-            <input
-              type="tel"
-              required
-              maxLength={10}
-              value={customerMobile}
-              onChange={(e) => setCustomerMobile(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))}
-              className="w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]"
-            />
-          </div>
-
+        <div className="mt-6">
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            type="submit"
+            type="button"
+            onClick={handleSignIn}
             disabled={loading}
             className="w-full py-4 rounded-xl bg-gradient-to-r from-[#FF4D00] to-[#FF7A00] text-white font-extrabold text-xs uppercase tracking-wider shadow-lg shadow-[#FF4D00]/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-6"
           >
@@ -133,16 +84,16 @@ export default function LoginPage() {
               </>
             ) : (
               <>
-                CONTINUE TO NO-WAIT <ArrowRight className="w-4 h-4" />
+                CONTINUE WITH GOOGLE <ArrowRight className="w-4 h-4" />
               </>
             )}
           </motion.button>
-        </form>
+        </div>
 
         {/* Security Badge */}
         <div className="mt-8 pt-4 border-t border-[#252525] text-center text-[11px] text-[#A1A1A1]/70 flex items-center justify-center gap-2">
           <ShieldCheck className="w-4 h-4 text-[#FF4D00]" />
-          <span>256-Bit Encrypted Customer Verification</span>
+          <span>Account verified securely through Firebase and Google</span>
         </div>
 
       </motion.div>

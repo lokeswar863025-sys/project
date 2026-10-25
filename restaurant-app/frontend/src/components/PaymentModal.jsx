@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, QrCode, CheckCircle2, ShieldCheck, Copy, Check, Loader2, Sparkles, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, CheckCircle2, ShieldCheck, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 
 export default function PaymentModal({
@@ -17,21 +17,12 @@ export default function PaymentModal({
   paymentStatus = 'PENDING',
   onPaymentSuccess
 }) {
-  const [copied, setCopied] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [currentStatus, setCurrentStatus] = useState(paymentStatus || 'PENDING');
   const [noticeMsg, setNoticeMsg] = useState('');
 
-  // Calculate numeric amount for UPI QR code payload
   const displayTotal = total || (typeof amount === 'string' && amount.includes('₹') ? amount : `₹${amount || 0}`);
-  const numericAmount = parseFloat(displayTotal.toString().replace(/[^0-9.]/g, '')) || 0;
-
-  const payRef = paymentReference || `NW-PAY-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${orderId || '0001'}`;
-  const upiId = 'nowaitrestaurant@upi';
-
-  // Dynamic QR Code Encoding Server-Calculated Amount & Payment Reference
-  const upiPayload = `upi://pay?pa=${upiId}&pn=NO-WAIT%20RESTAURANT&am=${numericAmount}&tr=${payRef}&cu=INR`;
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(upiPayload)}`;
+  const payRef = paymentReference || 'PAYMENT-PROVIDER-NOT-CONFIGURED';
 
   useEffect(() => {
     if (isOpen) {
@@ -39,12 +30,6 @@ export default function PaymentModal({
       setNoticeMsg('');
     }
   }, [isOpen, paymentStatus]);
-
-  const handleCopyUpi = () => {
-    navigator.clipboard.writeText(upiId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleCheckPaymentStatus = async () => {
     setIsChecking(true);
@@ -72,20 +57,6 @@ export default function PaymentModal({
       }
     } catch (err) {
       setNoticeMsg('Payment status check: Payment is currently PENDING confirmation from UPI gateway.');
-    } finally {
-      setIsChecking(false);
-    }
-  };
-
-  const handleSimulateProviderVerification = async () => {
-    setIsChecking(true);
-    try {
-      const verRes = await api.verifyPayment(payRef, 'MARK_PAID');
-      setCurrentStatus('PAID');
-      if (onPaymentSuccess) onPaymentSuccess(verRes.data);
-    } catch (e) {
-      setCurrentStatus('PAID');
-      if (onPaymentSuccess) onPaymentSuccess({ id: orderId, total: displayTotal, status: 'PAID' });
     } finally {
       setIsChecking(false);
     }
@@ -176,7 +147,7 @@ export default function PaymentModal({
               <div className="text-center">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#111111] text-[#FF4D00] border border-[#FF4D00]/40 text-[11px] font-bold">
                   <Sparkles className="w-3.5 h-3.5" />
-                  DYNAMIC UPI PAYMENT GATEWAY
+                  ONLINE PAYMENT SETUP REQUIRED
                 </div>
                 <h2 className="text-2xl font-extrabold text-white uppercase mt-2">
                   COMPLETE PAYMENT (TABLE {tableNumber})
@@ -200,16 +171,8 @@ export default function PaymentModal({
                 </div>
               )}
 
-              {/* DYNAMIC QR CODE CONTAINER */}
-              <div className="relative mx-auto w-64 h-64 bg-white p-3 rounded-2xl shadow-xl flex items-center justify-center border-4 border-[#252525]">
-                <img
-                  src={qrCodeUrl}
-                  alt={`UPI Payment QR for ${displayTotal}`}
-                  className="w-full h-full object-contain"
-                />
-                
-                {/* Laser Scanning Bar Effect */}
-                <div className="absolute inset-x-2 h-1 bg-gradient-to-r from-transparent via-[#FF4D00] to-transparent shadow-[0_0_15px_#FF4D00] animate-bounce top-1/2 pointer-events-none" />
+              <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm leading-relaxed">
+                This project does not yet have a real payment provider connected. Your order remains <strong>payment pending</strong>. Please pay the restaurant directly and ask staff to confirm your order.
               </div>
 
               {/* PAYMENT REFERENCE & STATUS */}
@@ -243,15 +206,6 @@ export default function PaymentModal({
                 >
                   {isChecking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                   CHECK PAYMENT STATUS
-                </button>
-
-                <button
-                  disabled={isChecking}
-                  onClick={handleSimulateProviderVerification}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-[#FF4D00] to-[#FF7A00] text-white font-extrabold text-xs uppercase tracking-wider shadow-lg shadow-[#FF4D00]/30 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <QrCode className="w-4 h-4" />
-                  VERIFY & CONFIRM PAYMENT ({displayTotal})
                 </button>
 
                 <button

@@ -11,7 +11,7 @@ NO-WAIT is a restaurant web app for browsing a menu, making table reservations, 
 - Owner dashboard for restaurant statistics, reservations, orders, customers, analytics, menu management, and table management.
 - SQLite database initialization and migration logic in the backend.
 
-Some frontend services also use browser local storage and sample menu data. Payment and sign-in integrations should be treated as development/demo flows until configured and reviewed for production use.
+The backend verifies Firebase ID tokens before accepting customer actions. Administrator access is granted only to the email configured in `INITIAL_ADMIN_EMAIL`. Payment collection remains pending until a real provider and signed webhook are integrated; a browser click cannot confirm payment.
 
 ## Technology
 
@@ -65,6 +65,8 @@ npm run dev
 
 The API listens on `http://localhost:5000` by default. The SQLite database is created at `backend/data/nowait.db` when the API first initializes it. Set `PORT` in the backend environment to change the port. Set `TABLE_SHARING_ENABLED=false` to prevent multiple reservations from sharing a table's capacity; the default is enabled.
 
+`TAX_RATE_PERCENT` controls the example order tax calculation (default 5). Set it to the rate appropriate for the restaurant's location and pricing, or to 0 if displayed prices already include tax. Confirm tax rules with the restaurant before using the app for sales.
+
 ### 2. Start the frontend
 
 ```bash
@@ -73,9 +75,9 @@ npm install
 npm run dev
 ```
 
-Vite prints the frontend URL when it starts, normally `http://localhost:5173`. The frontend API client currently points to `http://localhost:5000/api` in `frontend/src/services/api.js`.
+Vite prints the frontend URL when it starts, normally `http://localhost:5173`. Its proxy sends `/api` requests to the backend on port 5000.
 
-### Optional Firebase setup
+### Firebase setup (required for sign-in)
 
 The Firebase client reads these Vite environment variables:
 
@@ -88,7 +90,9 @@ VITE_FIREBASE_MESSAGING_SENDER_ID
 VITE_FIREBASE_APP_ID
 ```
 
-Without real project values, the code falls back to demo placeholders. Google sign-in therefore requires a configured Firebase project and enabled Google provider to work correctly.
+Copy `frontend/.env.example` to `frontend/.env` and fill in the Firebase web app values. Enable Google under Firebase Console → Authentication → Sign-in method. Add `localhost` and your deployed host under Authentication → Settings → Authorized domains.
+
+Copy `backend/.env.example` to `backend/.env`. Set `FIREBASE_PROJECT_ID` to the same Firebase project ID and set `INITIAL_ADMIN_EMAIL` to the verified Google account allowed to manage the restaurant. Do not commit `.env` files. Restart the backend after editing its settings. For Render, enter those backend values and all `VITE_FIREBASE_*` values in the service's environment settings before building.
 
 ### Build and serve the frontend through Express
 
@@ -131,28 +135,28 @@ All API routes are prefixed with `/api`. Responses generally use `{ "success": t
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | API and database health summary |
-| POST | `/auth` | Find or create a customer record |
+| POST | `/auth` | Verify Firebase sign-in and create/update the customer record |
 | GET, PATCH | `/users/profile` | Read or update a customer profile |
 | GET | `/tables` | List tables |
 | GET | `/tables/available` | Check basic table availability |
 | GET | `/tables/availability` | Check availability for a date, time range, and party size |
 | GET | `/menu` | List menu items |
 | GET | `/menu/:id` | Read one menu item |
-| POST, PATCH, DELETE | `/menu` and `/menu/:id` | Create, update, or remove menu items |
+| POST, PATCH, DELETE | `/menu` and `/menu/:id` | Administrator-only menu changes |
 | POST | `/reservations` | Create a reservation |
 | GET | `/reservations/my-reservations` | List the authenticated customer's reservations |
-| GET | `/reservations` | List reservations for administration |
+| GET | `/reservations` | Administrator-only reservation list |
 | DELETE | `/reservations/:id` | Cancel a reservation |
 | POST | `/orders` | Create an order |
 | GET | `/orders/my-orders` | List the authenticated customer's orders |
-| GET, PATCH | `/orders/:id` | Read an order or update its status |
+| GET | `/orders/:id` | Read an order belonging to the signed-in customer or administrator |
 | GET | `/payments/:paymentId` | Read payment status/details |
-| POST | `/payments/:paymentId/verify` | Run the payment verification flow |
-| POST | `/payments/webhook` | Payment webhook endpoint |
-| POST | `/owner/login` | Owner login |
+| POST | `/payments/:paymentId/verify` | Not enabled until a payment provider is integrated |
+| POST | `/payments/webhook` | Not enabled until signed provider verification is implemented |
+| POST | `/owner/login` | Deprecated; use Firebase administrator sign-in |
 | GET | `/admin/stats` | Dashboard summary metrics |
 | GET, PATCH | `/admin/reservations` and `/admin/reservations/:id/...` | Search reservations and change status/timing |
-| GET, PATCH | `/admin/orders` and `/admin/orders/:id/status` | Search orders and change order/payment status |
+| GET, PATCH | `/admin/orders` and `/admin/orders/:id/status` | Search orders and update kitchen order status |
 | GET | `/admin/customers` | List customer records |
 | GET | `/admin/analytics` | Dashboard analytics |
 | GET, POST | `/admin/tables` | List or create tables |
@@ -164,10 +168,11 @@ Availability accepts `date`, `arrivalTime` (or `time`), `leavingTime`, `guests`,
 
 - SQLite schema creation and best-effort migrations run from `backend/db.js` when the database connection is first opened.
 - The checked-in `backend/data/nowait.db` may contain local development data. Keep a copy before replacing or deleting it.
-- Customer API requests pass a user identifier in the `x-user-id` header. This is application-level identification, not a secure production authentication boundary by itself.
-- Admin table calls currently send a static `x-admin-token` from the frontend service. Do not expose this pattern as a production security mechanism; replace it with server-validated authentication and authorization before deployment.
-- The API currently enables CORS broadly and uses a fixed localhost API URL in the frontend. Configure both appropriately before public deployment.
-- Payment-related API and UI flows exist, but configure a real payment provider and verify server-side callbacks before accepting real payments.
+- Customer identity comes from verified Firebase ID tokens. The server ignores client-supplied IDs and roles for access decisions. Admin APIs require a verified token for the email configured in `INITIAL_ADMIN_EMAIL`.
+- Customer reservation and order history is restricted to the signed-in customer. Menu changes and restaurant operations require administrator access.
+- Payment is not enabled. Do not use this version to collect real payments until a provider, signed webhooks, refunds, and reconciliation have been implemented and configured.
+- The Render free service uses temporary storage for this SQLite database. Use durable database storage and backups before relying on customer or restaurant records.
+- The initial menu and tables are example data; replace them with the restaurant's actual information before inviting customers.
 - QR pages use query parameters such as `/qr-order?table=T01`; table identifiers are normalized by the order service.
 
 ## Useful commands
