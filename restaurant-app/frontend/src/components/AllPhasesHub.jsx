@@ -54,7 +54,7 @@ export default function AllPhasesHub() {
       phase: 'PHASE 7 & 8',
       title: 'Backend & SQLite DB',
       desc: 'Express REST API, relational database tables (users, orders, payments, reservations).',
-      link: 'http://localhost:5000/api/health',
+      link: '/api/health',
       isExternal: true,
       badge: 'REST API & SQL',
       icon: Database,

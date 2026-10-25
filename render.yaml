@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: nowait-restaurant
+    runtime: node
+    plan: free
+    branch: main
+    rootDir: restaurant-app
+    buildCommand: cd frontend && npm ci && npm run build && cd ../backend && npm ci
+    startCommand: cd backend && npm start
+    healthCheckPath: /api/health
