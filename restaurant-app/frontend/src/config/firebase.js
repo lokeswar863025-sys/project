@@ -10,10 +10,17 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || ''
 };
 
-const isConfigured = Object.values(firebaseConfig).every(Boolean);
+export const firebaseConfigured = Object.values(firebaseConfig).every((value) =>
+  value && !/your-|demo|placeholder|missing-firebase-config/i.test(value)
+);
 
 // Initialize Firebase safely
-const app = getApps().length === 0 ? initializeApp(isConfigured ? firebaseConfig : { apiKey: 'missing-firebase-config', authDomain: 'localhost', projectId: 'missing-firebase-config', appId: 'missing-firebase-config' }) : getApp();
+const app = getApps().length === 0 ? initializeApp(firebaseConfigured ? firebaseConfig : {
+  apiKey: 'missing-firebase-config',
+  authDomain: 'localhost',
+  projectId: 'missing-firebase-config',
+  appId: 'missing-firebase-config'
+}) : getApp();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 

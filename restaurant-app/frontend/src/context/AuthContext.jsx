@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
-import { auth, googleProvider } from '../config/firebase';
+import { auth, firebaseConfigured, googleProvider } from '../config/firebase';
 import api from '../services/api';
 
 const AuthContext = createContext(null);
@@ -59,6 +59,10 @@ export function AuthProvider({ children }) {
 
   const loginUser = async () => {
     setAuthError(null);
+    if (!firebaseConfigured) {
+      setAuthError('Firebase is not configured yet. Replace the placeholder values in frontend/.env with your Firebase web app settings, then restart the app.');
+      return null;
+    }
     setLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
