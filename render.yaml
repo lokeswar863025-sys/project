@@ -9,21 +9,11 @@ services:
     startCommand: cd backend && npm start
     healthCheckPath: /api/health
     envVars:
-      - key: FIREBASE_PROJECT_ID
+      - key: JWT_SECRET
         sync: false
       - key: INITIAL_ADMIN_EMAIL
         sync: false
+      - key: INITIAL_ADMIN_PASSWORD
+        sync: false
       - key: TAX_RATE_PERCENT
-        sync: false
-      - key: VITE_FIREBASE_API_KEY
-        sync: false
-      - key: VITE_FIREBASE_AUTH_DOMAIN
-        sync: false
-      - key: VITE_FIREBASE_PROJECT_ID
-        sync: false
-      - key: VITE_FIREBASE_STORAGE_BUCKET
-        sync: false
-      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
-        sync: false
-      - key: VITE_FIREBASE_APP_ID
         sync: false

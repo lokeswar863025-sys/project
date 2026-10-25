@@ -1,6 +1,5 @@
-import { auth } from '../config/firebase';
-
 const API_BASE_URL = '/api';
+export const AUTH_TOKEN_KEY = 'no_wait_auth_token';
 
 /**
  * Universal JSON API Request Wrapper with Customer Data Isolation Headers
@@ -12,8 +11,8 @@ export async function apiRequest(endpoint, method = 'GET', body = null, userId =
     ...customHeaders
   };
 
-  const firebaseUser = auth.currentUser;
-  if (firebaseUser) headers.Authorization = `Bearer ${await firebaseUser.getIdToken()}`;
+  const sessionToken = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
 
   const config = {
     method,
@@ -44,7 +43,9 @@ export async function apiRequest(endpoint, method = 'GET', body = null, userId =
 // API Endpoints Client
 export const api = {
   // Auth & Profile
-  authenticateUser: (userData) => apiRequest('/auth', 'POST', userData),
+  register: (account) => apiRequest('/auth/register', 'POST', account),
+  login: (credentials) => apiRequest('/auth/login', 'POST', credentials),
+  authenticateUser: () => apiRequest('/auth/me'),
   updateProfile: (profileData, userId) => apiRequest('/users/profile', 'PATCH', profileData, userId),
   getProfile: (userId) => apiRequest('/users/profile', 'GET', null, userId),
 

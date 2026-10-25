@@ -8,7 +8,7 @@ import api from '../services/api';
 import FadeUp from '../components/animations/FadeUp';
 
 export default function ProfilePage() {
-  const { user, logout, loginUser } = useAuth();
+  const { user, logout, updateUserProfile } = useAuth();
   const navigate = useNavigate();
 
   const [reservations, setReservations] = useState([]);
@@ -60,17 +60,15 @@ export default function ProfilePage() {
     }
 
     try {
-      await api.updateProfile({ name: editName.trim(), mobileNumber: cleanDigits }, user?.uid);
-    } catch (e) {
-      // Local fallback
+      await updateUserProfile({ name: editName.trim(), mobileNumber: cleanDigits });
+      setEditSuccess(true);
+      setTimeout(() => {
+        setEditSuccess(false);
+        setIsEditModalOpen(false);
+      }, 1200);
+    } catch (error) {
+      setEditError(error.message || 'Could not update your profile. Please try again.');
     }
-
-    loginUser(user?.email || 'user@example.com', editName.trim(), cleanDigits);
-    setEditSuccess(true);
-    setTimeout(() => {
-      setEditSuccess(false);
-      setIsEditModalOpen(false);
-    }, 1200);
   };
 
   const activeReservations = reservations.filter((r) => r.status === 'CONFIRMED');
@@ -113,7 +111,7 @@ export default function ProfilePage() {
                     {user?.displayName || 'Valued Diner'}
                   </h2>
                   <span className="px-3 py-1 rounded-full bg-[#FF4D00]/20 text-[#FF4D00] border border-[#FF4D00]/30 text-[10px] font-mono font-bold">
-                    VERIFIED CUSTOMER
+                    CUSTOMER ACCOUNT
                   </span>
                 </div>
 

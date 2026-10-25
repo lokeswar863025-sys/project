@@ -1,54 +1,105 @@
-import { createPublicKey, verify as verifySignature } from 'node:crypto';
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  scrypt as scryptCallback,
+  timingSafeEqual
+} from 'node:crypto';
+import { promisify } from 'node:util';
 
-const FIREBASE_KEYS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
-let cachedKeys = null;
-let keysExpireAt = 0;
+const scrypt = promisify(scryptCallback);
+const SESSION_LIFETIME_SECONDS = 60 * 60 * 24;
 
-async function getFirebaseKeys() {
-  if (cachedKeys && Date.now() < keysExpireAt) return cachedKeys;
-  const response = await fetch(FIREBASE_KEYS_URL);
-  if (!response.ok) throw new Error('Unable to load Firebase signing keys.');
-  const payload = await response.json();
-  cachedKeys = new Map(payload.keys.map((key) => [key.kid, key]));
-  const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] || 3600);
-  keysExpireAt = Date.now() + maxAge * 1000;
-  return cachedKeys;
+export function getConfiguredAdminEmail() {
+  return (process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase();
 }
 
-export async function verifyFirebaseIdToken(token) {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId) throw new Error('Firebase authentication is not configured on the server.');
-  const parts = String(token || '').split('.');
-  if (parts.length !== 3) throw new Error('Invalid sign-in token.');
+function getTokenSecret() {
+  const secret = process.env.JWT_SECRET || '';
+  if (secret.length < 32 || /change.?me|your.?jwt|placeholder/i.test(secret)) {
+    throw new Error('Set a random JWT_SECRET of at least 32 characters in backend/.env before starting the server.');
+  }
+  return secret;
+}
 
+export function assertTokenSecret() {
+  getTokenSecret();
+}
+
+export async function hashPassword(password) {
+  const salt = randomBytes(16);
+  const derived = await scrypt(password, salt, 64);
+  return `${salt.toString('hex')}:${derived.toString('hex')}`;
+}
+
+export async function verifyPassword(password, storedHash) {
+  if (typeof storedHash !== 'string') return false;
+  const [saltHex, keyHex] = storedHash.split(':');
+  if (!saltHex || !keyHex || !/^[a-f0-9]{32}$/i.test(saltHex) || !/^[a-f0-9]{128}$/i.test(keyHex)) return false;
+  const expected = Buffer.from(keyHex, 'hex');
+  const actual = await scrypt(password, Buffer.from(saltHex, 'hex'), expected.length);
+  return timingSafeEqual(expected, actual);
+}
+
+export function createSessionToken(user) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    sub: user.id,
+    email: user.email,
+    name: user.name,
+    iat: now,
+    exp: now + SESSION_LIFETIME_SECONDS
+  })).toString('base64url');
+  const content = `${header}.${payload}`;
+  const signature = createHmac('sha256', getTokenSecret()).update(content).digest('base64url');
+  return `${content}.${signature}`;
+}
+
+export function verifySessionToken(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) throw new Error('Invalid or expired sign-in session.');
+  const content = `${parts[0]}.${parts[1]}`;
+  const expected = createHmac('sha256', getTokenSecret()).update(content).digest();
+  const supplied = Buffer.from(parts[2], 'base64url');
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+    throw new Error('Invalid or expired sign-in session.');
+  }
   const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
   const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-  if (header.alg !== 'RS256' || !header.kid) throw new Error('Unsupported sign-in token.');
-
-  const keys = await getFirebaseKeys();
-  const jwk = keys.get(header.kid);
-  if (!jwk) {
-    cachedKeys = null;
-    const refreshedKeys = await getFirebaseKeys();
-    if (!refreshedKeys.has(header.kid)) throw new Error('Unknown sign-in token key.');
-  }
-  const signingKey = (cachedKeys || keys).get(header.kid);
-  const validSignature = verifySignature(
-    'RSA-SHA256',
-    Buffer.from(`${parts[0]}.${parts[1]}`),
-    createPublicKey({ key: signingKey, format: 'jwk' }),
-    Buffer.from(parts[2], 'base64url')
-  );
   const now = Math.floor(Date.now() / 1000);
-  if (!validSignature || claims.aud !== projectId || claims.iss !== `https://securetoken.google.com/${projectId}` ||
-      !claims.sub || typeof claims.sub !== 'string' || claims.sub.length > 128 || claims.exp <= now ||
-      !Number.isFinite(claims.exp) || !Number.isFinite(claims.iat) || !Number.isFinite(claims.auth_time) ||
-      claims.iat > now + 60 || claims.auth_time > now + 60 || claims.email_verified !== true || !claims.email) {
-    throw new Error('Sign-in token is invalid or expired.');
+  if (header.alg !== 'HS256' || !claims.sub || !Number.isFinite(claims.exp) || claims.exp <= now ||
+      !Number.isFinite(claims.iat) || claims.iat > now + 60) {
+    throw new Error('Invalid or expired sign-in session.');
   }
   return claims;
 }
 
-export function getConfiguredAdminEmail() {
-  return (process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase();
+export async function provisionInitialAdmin(db) {
+  const email = getConfiguredAdminEmail();
+  const password = process.env.INITIAL_ADMIN_PASSWORD || '';
+  if (!email && !password) {
+    console.warn('[NO-WAIT Backend] Owner login is disabled until INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD are configured.');
+    return;
+  }
+  if (!email || !password) {
+    throw new Error('Set both INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD to enable owner login.');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12) {
+    throw new Error('INITIAL_ADMIN_EMAIL must be valid and INITIAL_ADMIN_PASSWORD must be at least 12 characters.');
+  }
+  const passwordHash = await hashPassword(password);
+  const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = ?', [email]);
+  if (existing) {
+    await db.run(
+      "UPDATE users SET password_hash = ?, role = 'ADMIN', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [passwordHash, existing.id]
+    );
+    return;
+  }
+  const id = `admin-${randomUUID()}`;
+  await db.run(
+    "INSERT INTO users (id, name, email, password_hash, role) VALUES (?, 'Restaurant Administrator', ?, ?, 'ADMIN')",
+    [id, email, passwordHash]
+  );
 }

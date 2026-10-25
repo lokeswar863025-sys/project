@@ -2,7 +2,7 @@
 
 A restaurant web application for menu browsing, table reservations, table QR ordering, and owner operations.
 
-The application source and detailed project documentation are in [`restaurant-app/`](restaurant-app/).
+The application source and detailed project documentation are in restaurant-app/.
 
 ## Run locally
 
@@ -11,6 +11,11 @@ Start the backend in one terminal:
 ```text
 cd restaurant-app/backend
 npm install
+```
+
+Copy restaurant-app/backend/.env.example to restaurant-app/backend/.env. Choose a unique JWT_SECRET with at least 32 characters, and set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD for owner login. Keep .env private.
+
+```text
 npm run dev
 ```
 
@@ -24,8 +29,8 @@ npm run dev
 
 ## Deploy as a website
 
-This repository includes a Render Blueprint in `render.yaml`. In Render, create a Blueprint from this GitHub repository and deploy the `nowait-restaurant` web service. The service builds the React frontend and runs it with the Express API. Render provides a public `onrender.com` URL after deployment.
+This repository includes a Render Blueprint in render.yaml. Create a Blueprint from this GitHub repository and deploy the nowait-restaurant web service. Set JWT_SECRET, INITIAL_ADMIN_EMAIL, and INITIAL_ADMIN_PASSWORD in Render. Render provides a public onrender.com URL after deployment.
 
-The free web service may sleep when idle, and its local SQLite data is temporary. This deployment is suitable for a project demo; use persistent or managed storage if database records must survive restarts and deploys.
+The free web service may sleep when idle, and its local SQLite data is temporary. This is suitable for a project demo; use persistent or managed storage if records must survive restarts and deploys.
 
-Google sign-in must be configured before customer booking or administrator access works. Render will prompt for the Firebase variables listed in `render.yaml`; use the same project ID for frontend and backend, and set `INITIAL_ADMIN_EMAIL` to your verified administrator Google email. Online payment is intentionally disabled until a real payment provider is connected.
+Customer sign-in uses email and password. Visitors register on /login; the owner uses /owner/login with the administrator credentials configured on the backend. Google/Firebase sign-in has been removed. This demo does not include email verification or password-reset email flows. Online payment is disabled until a real provider is connected.

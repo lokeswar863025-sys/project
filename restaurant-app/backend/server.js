@@ -5,7 +5,15 @@ import path from 'path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { getDb } from './db.js';
-import { getConfiguredAdminEmail, verifyFirebaseIdToken } from './auth.js';
+import {
+  assertTokenSecret,
+  createSessionToken,
+  getConfiguredAdminEmail,
+  hashPassword,
+  provisionInitialAdmin,
+  verifyPassword,
+  verifySessionToken
+} from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,20 +29,26 @@ if (process.env.CORS_ORIGIN) {
 }
 app.use(express.json());
 
+// Async Error Wrapper Helper
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
 // Never treat browser-supplied IDs or role flags as proof of identity.
 const getAuthUserId = (req) => req.auth?.userId || null;
 const authenticate = asyncHandler(async (req, res, next) => {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return res.status(401).json({ success: false, message: 'Please sign in to continue.' });
   try {
-    const claims = await verifyFirebaseIdToken(token);
+    const claims = verifySessionToken(token);
     const db = await getDb();
-    const user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
+    const user = await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [claims.sub]);
+    if (!user) return res.status(401).json({ success: false, message: 'This account is no longer available. Please register again.' });
     req.auth = {
       claims,
-      userId: user?.id || claims.sub,
+      userId: user.id,
       user,
-      isAdmin: Boolean(user && user.role === 'ADMIN' && claims.email?.toLowerCase() === getConfiguredAdminEmail())
+      isAdmin: Boolean(user.role === 'ADMIN' && user.email.toLowerCase() === getConfiguredAdminEmail())
     };
     next();
   } catch (error) {
@@ -45,14 +59,14 @@ const requireAdmin = asyncHandler(async (req, res, next) => {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return res.status(401).json({ success: false, message: 'Administrator sign-in is required.' });
   try {
-    const claims = await verifyFirebaseIdToken(token);
+    const claims = verifySessionToken(token);
     const adminEmail = getConfiguredAdminEmail();
     if (!adminEmail || claims.email?.toLowerCase() !== adminEmail) {
       return res.status(403).json({ success: false, message: 'This account is not configured as a restaurant administrator.' });
     }
     const db = await getDb();
-    const user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
-    if (!user || user.role !== 'ADMIN') return res.status(403).json({ success: false, message: 'Sign in with the configured administrator account first, then retry.' });
+    const user = await db.get('SELECT id, name, email, role FROM users WHERE id = ?', [claims.sub]);
+    if (!user || user.role !== 'ADMIN' || user.email.toLowerCase() !== adminEmail) return res.status(403).json({ success: false, message: 'Sign in with the configured administrator email and password.' });
     req.auth = { claims, userId: user.id, user, isAdmin: true };
     next();
   } catch (error) {
@@ -154,11 +168,6 @@ const evaluateTableCapacityAndStatus = (table, overlappingReservations, reqGuest
   };
 };
 
-// Async Error Wrapper Helper
-const asyncHandler = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
-};
-
 // Health Check API
 app.get('/api/health', asyncHandler(async (req, res) => {
   const db = await getDb();
@@ -177,36 +186,72 @@ app.get('/api/health', asyncHandler(async (req, res) => {
 
 // ==================== AUTH & USER PROFILE APIs ====================
 
-app.post('/api/auth', asyncHandler(async (req, res) => {
-  let claims;
-  try {
-    claims = await verifyFirebaseIdToken(req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]);
-  } catch (error) {
-    const status = error.message.includes('not configured') ? 503 : 401;
-    return res.status(status).json({ success: false, message: error.message });
+const loginAttempts = new Map();
+const loginAttemptLimit = 8;
+const loginAttemptWindowMs = 15 * 60 * 1000;
+const isValidEmail = (email) => typeof email === 'string' && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const safeUser = ({ id, name, email, mobile_number, photo, role }) => ({ id, name, email, mobile_number, photo, role });
+
+app.post('/api/auth/register', asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = req.body.password;
+  if (name.length < 2 || name.length > 100 || !isValidEmail(email) || typeof password !== 'string' || password.length < 12 || password.length > 128) {
+    return res.status(400).json({ success: false, message: 'Enter your name, a valid email, and a password of at least 12 characters.' });
   }
+  if (email === getConfiguredAdminEmail()) {
+    return res.status(403).json({ success: false, message: 'This email is reserved for the configured restaurant administrator.' });
+  }
+
   const db = await getDb();
-  const email = claims.email.toLowerCase();
-  const configuredAdmin = Boolean(getConfiguredAdminEmail()) && email === getConfiguredAdminEmail();
-  let user = await db.get('SELECT * FROM users WHERE google_id = ?', [claims.sub]);
-  if (!user) user = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [email]);
+  const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = ?', [email]);
+  if (existing) return res.status(409).json({ success: false, message: 'An account with this email already exists. Please sign in.' });
 
-  if (user) {
+  const id = `user-${randomUUID()}`;
+  const passwordHash = await hashPassword(password);
+  try {
     await db.run(
-      `UPDATE users SET google_id = ?, name = ?, email = ?, photo = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [claims.sub, claims.name || user.name || 'Customer', email, claims.picture || user.photo || '', configuredAdmin ? 'ADMIN' : 'CUSTOMER', user.id]
+      "INSERT INTO users (id, name, email, password_hash, role) VALUES (?, ?, ?, ?, 'CUSTOMER')",
+      [id, name, email, passwordHash]
     );
-    user = await db.get('SELECT id, google_id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [user.id]);
-    return res.json({ success: true, data: user });
+  } catch (error) {
+    if (String(error.code || '').startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ success: false, message: 'An account with this email already exists. Please sign in.' });
+    throw error;
   }
 
-  const userId = claims.sub;
-  await db.run(
-    `INSERT INTO users (id, google_id, name, email, photo, role) VALUES (?, ?, ?, ?, ?, ?)`,
-    [userId, claims.sub, claims.name || 'Customer', email, claims.picture || '', configuredAdmin ? 'ADMIN' : 'CUSTOMER']
-  );
-  user = await db.get('SELECT id, google_id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [userId]);
-  res.status(201).json({ success: true, data: user });
+  const user = safeUser(await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [id]));
+  res.status(201).json({ success: true, data: { user, token: createSessionToken(user) } });
+}));
+
+app.post('/api/auth/login', asyncHandler(async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = req.body.password;
+  if (!isValidEmail(email) || typeof password !== 'string' || password.length > 128) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email address and password.' });
+  }
+
+  const now = Date.now();
+  const attemptKey = `${req.ip}:${email}`;
+  const attempts = (loginAttempts.get(attemptKey) || []).filter((timestamp) => now - timestamp < loginAttemptWindowMs);
+  if (attempts.length >= loginAttemptLimit) {
+    return res.status(429).json({ success: false, message: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
+  }
+  attempts.push(now);
+  loginAttempts.set(attemptKey, attempts);
+
+  const db = await getDb();
+  const user = await db.get('SELECT id, name, email, mobile_number, photo, role, password_hash FROM users WHERE LOWER(email) = ?', [email]);
+  const validPassword = await verifyPassword(password, user?.password_hash);
+  if (!user || !validPassword) {
+    return res.status(401).json({ success: false, message: 'Email or password is incorrect.' });
+  }
+  loginAttempts.delete(attemptKey);
+  const publicUser = safeUser(user);
+  res.json({ success: true, data: { user: publicUser, token: createSessionToken(publicUser) } });
+}));
+
+app.get('/api/auth/me', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, data: safeUser(req.auth.user) });
 }));
 
 app.patch('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
@@ -238,7 +283,7 @@ app.patch('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
     [name ? name.trim() : existing.name, cleanMobile, userId]
   );
 
-  const updatedUser = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
+  const updatedUser = await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [userId]);
   res.json({ success: true, message: 'Profile updated successfully.', data: updatedUser });
 }));
 
@@ -249,7 +294,7 @@ app.get('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
   }
 
   const db = await getDb();
-  const userRecord = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
+  const userRecord = await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [userId]);
   if (!userRecord) {
     return res.status(404).json({ success: false, message: 'User profile not found.' });
   }
@@ -907,7 +952,7 @@ app.patch('/api/orders/:id', requireAdmin, asyncHandler(async (req, res) => {
 // ==================== OWNER / ADMIN AUTHENTICATION API ====================
 app.post('/api/owner/login', (req, res) => res.status(410).json({
   success: false,
-  message: 'Password-only owner login has been removed. Sign in with the configured Firebase administrator account.'
+  message: 'Use email and password sign-in at /api/auth/login.'
 }));
 
 // ==================== COMPREHENSIVE ADMIN MANAGEMENT APIs ====================
@@ -1272,6 +1317,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[NO-WAIT Backend] Running on http://localhost:${PORT} with SQLite DB (nowait.db)`);
+const startServer = async () => {
+  assertTokenSecret();
+  const db = await getDb();
+  await provisionInitialAdmin(db);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[NO-WAIT Backend] Running on http://localhost:${PORT} with SQLite DB (nowait.db)`);
+  });
+};
+
+startServer().catch((error) => {
+  console.error('[NO-WAIT Backend] Startup failed:', error.message);
+  process.exitCode = 1;
 });

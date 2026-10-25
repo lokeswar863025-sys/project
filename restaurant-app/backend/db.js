@@ -35,6 +35,7 @@ export async function getDb() {
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password TEXT,
+      password_hash TEXT,
       mobile_number TEXT,
       photo TEXT,
       role TEXT CHECK(role IN ('CUSTOMER', 'ADMIN', 'STAFF')) DEFAULT 'CUSTOMER',
@@ -148,6 +149,9 @@ export async function getDb() {
   // Migration helper: Add missing columns if database exists from prior phases
   try {
     await dbInstance.run('ALTER TABLE users ADD COLUMN password TEXT');
+  } catch (e) {}
+  try {
+    await dbInstance.run('ALTER TABLE users ADD COLUMN password_hash TEXT');
   } catch (e) {}
   try {
     await dbInstance.run('ALTER TABLE users ADD COLUMN updated_at DATETIME');
