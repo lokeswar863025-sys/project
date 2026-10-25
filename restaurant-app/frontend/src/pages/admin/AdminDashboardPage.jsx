@@ -1241,7 +1241,6 @@ export default function AdminDashboardPage() {
                 <thead className="border-b border-[#2d3748] text-[#94a3b8]">
                   <tr>
                     <th className="py-3 px-2">Name</th>
-                    <th className="py-3 px-2">Email</th>
                     <th className="py-3 px-2">Mobile</th>
                     <th className="py-3 px-2">Total Bookings</th>
                     <th className="py-3 px-2">Total Orders</th>
@@ -1251,7 +1250,6 @@ export default function AdminDashboardPage() {
                   {customers.map((c) => (
                     <tr key={c.id}>
                       <td className="py-3 px-2 font-bold text-white">{c.name}</td>
-                      <td className="py-3 px-2 text-[#94a3b8]">{c.email}</td>
                       <td className="py-3 px-2 text-[#94a3b8]">{c.mobile_number || 'N/A'}</td>
                       <td className="py-3 px-2 text-white font-bold">{c.total_bookings || 0}</td>
                       <td className="py-3 px-2 text-white font-bold">{c.total_orders || 0}</td>

@@ -5,13 +5,13 @@ NO-WAIT is a restaurant web app for browsing the menu, making table reservations
 ## Features
 
 - Restaurant home, menu, information, and how-it-works pages.
-- Customer email-and-password registration, sign-in, profile, reservation history, and order history.
+- Customer registration and sign-in using name and mobile number, plus profile, reservation history, and order history.
 - Table reservations with date, time, party size, capacity, and availability checks.
 - QR ordering with a cart and order status flow.
 - Owner dashboard for reservations, orders, customers, analytics, menu, and tables.
 - SQLite database initialization and migrations.
 
-Google/Firebase sign-in has been removed. Passwords are stored as salted scrypt hashes, and the API issues signed sessions using JWT_SECRET. The administrator account is provisioned from backend environment variables. Payments are not enabled until a real provider and signed webhook are integrated.
+Customer accounts use name and mobile number only; no customer email or password is requested. The demo does not verify phone ownership with SMS, so it is not suitable for public production use without adding phone verification. The separate owner account uses its configured administrator credentials. The API issues signed sessions using JWT_SECRET. Payments are not enabled until a real provider and signed webhook are integrated.
 
 ## Technology
 
@@ -35,7 +35,7 @@ cd backend
 npm install
 ```
 
-Copy backend/.env.example to backend/.env. Set JWT_SECRET to a random secret of at least 32 characters. To enable owner login, set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD; the password must be at least 12 characters. Keep .env private and do not commit it. The server creates or updates this administrator account at startup.
+Copy backend/.env.example to backend/.env. Set JWT_SECRET to a random secret of at least 32 characters. To enable the separate owner login, set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD; the password must be at least 12 characters. Keep .env private and do not commit it. The server creates or updates this administrator account at startup.
 
 ```bash
 npm run dev
@@ -91,7 +91,8 @@ All API routes are prefixed with /api. Responses generally use { "success": true
 |---|---|---|
 | GET | /health | API and database health |
 | POST | /auth/register | Create customer account and sign in |
-| POST | /auth/login | Sign in with email and password |
+| POST | /auth/login | Sign in with name and mobile number |
+| POST | /auth/admin-login | Administrator sign-in |
 | GET | /auth/me | Return current signed-in account |
 | GET, PATCH | /users/profile | Read or update customer profile |
 | GET | /tables | List tables |
@@ -118,9 +119,8 @@ Availability accepts date, arrivalTime (or time), leavingTime, guests, and durat
 ## Data, security, and limitations
 
 - SQLite schema initialization and migrations run from backend/db.js.
-- Passwords use salted scrypt hashes; plaintext passwords are not stored. Protected routes verify signed tokens and read current roles from SQLite.
-- Set a unique private JWT_SECRET of at least 32 characters. Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD to create/update the owner account. Customer registration cannot use the configured admin email.
-- This demo does not include email verification or password-reset email flows. Add them before public production use.
+- The app issues signed sessions and reads current roles from SQLite. Customer sign-in checks a name and mobile number, but does not prove phone ownership; anyone who knows both can sign in. Add SMS one-time-code verification before public production use.
+- Set a unique private JWT_SECRET of at least 32 characters. The separate owner account uses INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD.
 - Payment collection is disabled. Integrate a payment provider, signed webhooks, refunds, and reconciliation before accepting real payments.
 - Render's free service uses temporary storage for SQLite. Use durable storage and backups for real customer records.
 - Replace example menu and table data before inviting customers.

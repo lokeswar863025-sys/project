@@ -48,34 +48,51 @@ export function AuthProvider({ children }) {
     return () => { active = false; };
   }, []);
 
-  const loginUser = async (email, password) => {
+  const loginUser = async (name, mobileNumber) => {
     setAuthError(null);
     setLoading(true);
     try {
-      const response = await api.login({ email, password });
+      const response = await api.login({ name, mobileNumber });
       localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
       const appUser = mapUser(response.data.user);
       setUser(appUser);
       setLoading(false);
       return appUser;
     } catch (error) {
-      setAuthError(error.message || 'Sign-in failed. Check your email and password.');
+      setAuthError(error.message || 'Sign-in failed. Check your name and mobile number.');
       setLoading(false);
       return null;
     }
   };
 
-  const registerUser = async (name, email, password) => {
+  const registerUser = async (name, mobileNumber) => {
     setAuthError(null);
     setLoading(true);
     try {
-      const response = await api.register({ name, email, password });
+      const response = await api.register({ name, mobileNumber });
       localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
       const appUser = mapUser(response.data.user);
       setUser(appUser);
       return appUser;
     } catch (error) {
       setAuthError(error.message || 'Account registration failed.');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loginAdmin = async (email, password) => {
+    setAuthError(null);
+    setLoading(true);
+    try {
+      const response = await api.adminLogin({ email, password });
+      localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
+      const appUser = mapUser(response.data.user);
+      setUser(appUser);
+      return appUser;
+    } catch (error) {
+      setAuthError(error.message || 'Administrator sign-in failed.');
       return null;
     } finally {
       setLoading(false);
@@ -98,7 +115,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error: authError, loginUser, registerUser, updateUserProfile, logout, clearError: () => setAuthError(null) }}>
+    <AuthContext.Provider value={{ user, loading, error: authError, loginUser, loginAdmin, registerUser, updateUserProfile, logout, clearError: () => setAuthError(null) }}>
       {children}
     </AuthContext.Provider>
   );

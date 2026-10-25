@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LogOut, Mail, ShieldCheck, Calendar, QrCode, Phone, User, Edit3, ShoppingBag, ArrowRight, CheckCircle2, Clock, X, AlertCircle } from 'lucide-react';
+import { LogOut, ShieldCheck, Calendar, QrCode, Phone, User, Edit3, ShoppingBag, ArrowRight, CheckCircle2, Clock, X, AlertCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getUserReservations } from '../services/bookingService';
 import { getUserOrders } from '../services/orderService';
@@ -17,14 +17,14 @@ export default function ProfilePage() {
 
   // Edit Profile Form State
   const [editName, setEditName] = useState(user?.displayName || '');
-  const [editMobile, setEditMobile] = useState(user?.mobile || '9876543210');
+  const [editMobile, setEditMobile] = useState(user?.mobile || '');
   const [editError, setEditError] = useState('');
   const [editSuccess, setEditSuccess] = useState(false);
 
   useEffect(() => {
     if (user) {
       setEditName(user.displayName || '');
-      setEditMobile(user.mobile || '9876543210');
+      setEditMobile(user.mobile || '');
 
       const uid = user.uid || user.id;
       // Fetch user's isolated reservations and orders
@@ -117,15 +117,9 @@ export default function ProfilePage() {
 
                 <p className="text-xs text-[#A1A1A1] flex items-center justify-center sm:justify-start gap-2 font-mono">
                   <Phone className="w-4 h-4 text-[#FF7A00]" />
-                  Mobile: <strong className="text-white">{user?.mobile || '9876543210'}</strong>
+                  Mobile: <strong className="text-white">{user?.mobile || 'Not added'}</strong>
                 </p>
 
-                {user?.email && !user.email.endsWith('@customer.nowait.local') && (
-                  <p className="text-xs text-[#A1A1A1] flex items-center justify-center sm:justify-start gap-2 font-mono">
-                    <Mail className="w-4 h-4 text-[#FF4D00]" />
-                    {user.email}
-                  </p>
-                )}
               </div>
             </div>
 
@@ -297,20 +291,8 @@ export default function ProfilePage() {
                 />
               </div>
 
-              {user?.email && !user.email.endsWith('@customer.nowait.local') && (
-                <div>
-                  <label className="block text-[#A1A1A1] mb-2 uppercase">Email Address</label>
-                  <input
-                    type="email"
-                    disabled
-                    value={user.email}
-                    className="w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-[#A1A1A1] text-sm opacity-60 cursor-not-allowed"
-                  />
-                </div>
-              )}
-
               <div>
-                <label className="block text-[#A1A1A1] mb-2 uppercase">Mobile Number (10 Digits)</label>
+              <label className="block text-[#A1A1A1] mb-2 uppercase">Mobile Number</label>
                 <input
                   type="tel"
                   required

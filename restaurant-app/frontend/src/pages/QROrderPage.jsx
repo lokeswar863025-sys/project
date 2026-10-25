@@ -163,8 +163,7 @@ export default function QROrderPage() {
         reservationId: activeReservation?.id,
         items: cartItems.map((c) => ({ id: c.id, quantity: c.quantity })),
         customerName: user?.displayName || activeReservation?.customer_name || 'Diner',
-        customerEmail: user?.email || activeReservation?.customer_email || '',
-        customerMobile: user?.mobile || activeReservation?.customer_mobile || '9876543210'
+        customerMobile: user?.mobile || activeReservation?.customer_mobile || ''
       }, user?.uid);
 
       if (res.data) {

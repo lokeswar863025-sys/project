@@ -45,6 +45,7 @@ export const api = {
   // Auth & Profile
   register: (account) => apiRequest('/auth/register', 'POST', account),
   login: (credentials) => apiRequest('/auth/login', 'POST', credentials),
+  adminLogin: (credentials) => apiRequest('/auth/admin-login', 'POST', credentials),
   authenticateUser: () => apiRequest('/auth/me'),
   updateProfile: (profileData, userId) => apiRequest('/users/profile', 'PATCH', profileData, userId),
   getProfile: (userId) => apiRequest('/users/profile', 'GET', null, userId),
@@ -79,7 +80,6 @@ export const api = {
   verifyPayment: (paymentId, action = 'VERIFY') => apiRequest(`/payments/${paymentId}/verify`, 'POST', { action }),
 
   // Owner & Admin APIs
-  ownerLogin: (credentials) => apiRequest('/owner/login', 'POST', credentials),
   getAdminStats: () => apiRequest('/admin/stats'),
   getAdminReservations: (status = 'ALL', search = '') => 
     apiRequest(`/admin/reservations?status=${encodeURIComponent(status)}&search=${encodeURIComponent(search)}`),

@@ -16,8 +16,8 @@ export default function AllPhasesHub() {
     },
     {
       phase: 'PHASE 3',
-      title: 'Google & Mobile Auth',
-      desc: 'Customer authentication with Name, Email & Mobile validation.',
+      title: 'Name & Mobile Sign-In',
+      desc: 'Customer registration and sign-in using a name and mobile number.',
       link: '/login',
       badge: 'AUTHENTICATION',
       icon: UserCheck,

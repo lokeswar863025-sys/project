@@ -103,7 +103,7 @@ function getStoredReservations() {
       id: 'NW-2026-8942',
       userId: 'sample-user-99',
       customerName: 'Marcus Vance',
-      customerEmail: 'marcus@example.com',
+      customerMobile: '',
       tableId: 'T04',
       tableName: 'Table 04',
       date: '2026-08-15',
@@ -172,7 +172,7 @@ export function getTablesWithStatus(date, timeSlot, selectedTableId = null, gues
   });
 }
 
-export function createReservation({ userId, customerName, customerEmail, date, timeSlot, leavingTime, guestCount, tableId }) {
+export function createReservation({ userId, customerName, customerMobile, date, timeSlot, leavingTime, guestCount, tableId }) {
   if (!isTableAvailable(tableId, date, timeSlot, leavingTime, guestCount)) {
     throw new Error(`Table ${tableId} is already booked for ${date} at ${timeSlot}. Please select another table or time slot.`);
   }
@@ -185,7 +185,7 @@ export function createReservation({ userId, customerName, customerEmail, date, t
     id: reservationId,
     userId,
     customerName,
-    customerEmail,
+    customerMobile,
     tableId,
     tableName: table ? table.name : tableId,
     tableZone: table ? table.zone : 'Main Dining',

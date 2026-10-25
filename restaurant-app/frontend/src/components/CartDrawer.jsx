@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Plus, Minus, Trash2, ShoppingBag, ArrowRight, QrCode, User, Mail, AlertTriangle } from 'lucide-react';
+import { X, Plus, Minus, Trash2, ShoppingBag, ArrowRight, QrCode, User, Phone, AlertTriangle } from 'lucide-react';
 import { calculateCartTotals } from '../services/orderService';
 import { useAuth } from '../context/AuthContext';
 import PaymentModal from './PaymentModal';
@@ -9,7 +9,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
   const { user } = useAuth();
 
   const [customerName, setCustomerName] = useState(user?.displayName || '');
-  const [customerEmail, setCustomerEmail] = useState(user?.email || '');
+  const [customerMobile, setCustomerMobile] = useState(user?.mobile || '');
   const [errorMsg, setErrorMsg] = useState('');
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
@@ -21,8 +21,9 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
       setErrorMsg('Please enter your Full Name before placing order.');
       return false;
     }
-    if (!customerEmail.trim() || !customerEmail.includes('@')) {
-      setErrorMsg('Please enter a valid Gmail address (e.g. name@gmail.com).');
+    const digits = customerMobile.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) {
+      setErrorMsg('Please enter a valid mobile number with 10 to 15 digits.');
       return false;
     }
     return true;
@@ -100,7 +101,7 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
                   </div>
                 ) : (
                   <>
-                    {/* CUSTOMER NAME AND GMAIL REQUIRED FIELDS */}
+                    {/* CUSTOMER NAME AND MOBILE NUMBER FIELDS */}
                     <div className="pb-4 space-y-3 font-mono text-xs border-b border-[#252525]">
                       <div className="text-white font-bold uppercase tracking-wider flex items-center gap-1">
                         <span>Customer Contact Information</span>
@@ -129,14 +130,15 @@ export default function CartDrawer({ isOpen, onClose, cartItems, onUpdateQuantit
 
                       <div>
                         <label className="block text-[#A1A1A1] mb-1 flex items-center gap-1">
-                          <Mail className="w-3.5 h-3.5 text-[#FF4D00]" /> Gmail Address <span className="text-rose-400">*</span>
+                          <Phone className="w-3.5 h-3.5 text-[#FF4D00]" /> Mobile Number <span className="text-rose-400">*</span>
                         </label>
                         <input
-                          type="email"
+                          type="tel"
+                          inputMode="tel"
                           required
-                          value={customerEmail}
-                          onChange={(e) => setCustomerEmail(e.target.value)}
-                          placeholder="Gmail Address"
+                          value={customerMobile}
+                          onChange={(e) => setCustomerMobile(e.target.value)}
+                          placeholder="Mobile Number"
                           className="w-full bg-[#050505] border border-[#252525] rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-[#FF4D00]"
                         />
                       </div>

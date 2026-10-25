@@ -33,4 +33,4 @@ This repository includes a Render Blueprint in render.yaml. Create a Blueprint f
 
 The free web service may sleep when idle, and its local SQLite data is temporary. This is suitable for a project demo; use persistent or managed storage if records must survive restarts and deploys.
 
-Customer sign-in uses email and password. Visitors register on /login; the owner uses /owner/login with the administrator credentials configured on the backend. Google/Firebase sign-in has been removed. This demo does not include email verification or password-reset email flows. Online payment is disabled until a real provider is connected.
+Customer registration and sign-in ask only for a name and mobile number. SMS ownership verification is not configured, so this demo sign-in is not suitable for protecting real customer accounts. The separate owner page uses the administrator credentials configured on the backend. Online payment is disabled until a real provider is connected.

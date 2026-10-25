@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 
 export default function OwnerLoginPage() {
   const navigate = useNavigate();
-  const { user, loginUser, loading: authLoading, error: authError } = useAuth();
+  const { user, loginAdmin, loading: authLoading, error: authError } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,7 +20,7 @@ export default function OwnerLoginPage() {
     event.preventDefault();
     setError('');
     setLoading(true);
-    const account = await loginUser(email, password);
+    const account = await loginAdmin(email, password);
     if (account?.role !== 'ADMIN') setError('This account does not have restaurant administrator access.');
     setLoading(false);
   };

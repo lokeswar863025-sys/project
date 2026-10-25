@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar, Clock, Users, CheckCircle2, ChevronRight, ArrowLeft, Utensils, AlertTriangle, ShieldCheck, Mail, User, Phone, ShoppingBag, QrCode, ArrowRight, Sparkles, Plus, Check, LogOut, Loader2, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, Users, CheckCircle2, ChevronRight, ArrowLeft, Utensils, AlertTriangle, ShieldCheck, User, Phone, ShoppingBag, QrCode, ArrowRight, Sparkles, Plus, Check, LogOut, Loader2, RefreshCw } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -46,7 +46,6 @@ export default function BookPage() {
   // Customer Contact Info
   const [customerName, setCustomerName] = useState(user?.displayName || '');
   const [customerMobile, setCustomerMobile] = useState(user?.mobile || '');
-  const [customerEmail, setCustomerEmail] = useState(user?.email || '');
   const [formError, setFormError] = useState('');
 
   // Confirmation result state
@@ -130,10 +129,8 @@ export default function BookPage() {
     if (user) {
       const name = user.displayName || user.name || '';
       const mob = user.mobile || user.mobileNumber || user.phone || '';
-      const mail = user.email || (mob ? `${mob}@customer.nowait.local` : '');
       if (name && !customerName) setCustomerName(name);
       if (mob && !customerMobile) setCustomerMobile(mob);
-      if (mail && !customerEmail) setCustomerEmail(mail);
     }
   }, [user]);
 
@@ -178,7 +175,6 @@ export default function BookPage() {
 
     const nameToUse = customerName.trim() || user?.displayName || user?.name || 'Customer Diner';
     const mobileToUse = customerMobile.trim() || user?.mobile || user?.mobileNumber || user?.phone || '';
-    const emailToSend = customerEmail.trim() || user?.email || (mobileToUse ? `${mobileToUse}@customer.nowait.local` : 'guest@nowait.local');
     const userIdToUse = user?.uid || user?.id || (mobileToUse ? `user-${mobileToUse}` : 'guest-user');
 
     try {
@@ -191,7 +187,6 @@ export default function BookPage() {
         guests: selectedGuests,
         customerName: nameToUse,
         customerMobile: mobileToUse,
-        customerEmail: emailToSend,
         userId: userIdToUse
       }, userIdToUse);
 
@@ -199,7 +194,6 @@ export default function BookPage() {
         const confirmedData = {
           id: res.data.id,
           customerName: res.data.customer_name || nameToUse,
-          customerEmail: res.data.customer_email || emailToSend,
           customerMobile: res.data.customer_mobile || mobileToUse,
           tableId: selectedTableId,
           tableName: selectedTableObj ? (selectedTableObj.tableNumber || selectedTableObj.name) : `Table ${selectedTableId}`,
@@ -217,7 +211,6 @@ export default function BookPage() {
               id: res.data.id,
               userId: user?.uid || user?.id || 'guest-user',
               customerName: confirmedData.customerName,
-              customerEmail: confirmedData.customerEmail,
               customerMobile: confirmedData.customerMobile,
               tableId: selectedTableId,
               tableName: confirmedData.tableName,
@@ -853,8 +846,8 @@ export default function BookPage() {
                 <span className="text-white font-bold">{confirmedReservation.customerName}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#A1A1A1]">Gmail:</span>
-                <span className="text-white font-bold">{confirmedReservation.customerEmail}</span>
+                <span className="text-[#A1A1A1]">Mobile Number:</span>
+                <span className="text-white font-bold">{confirmedReservation.customerMobile}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[#A1A1A1]">Reserved Table:</span>

@@ -11,9 +11,7 @@ export default function LoginPage() {
   const from = location.state?.from?.pathname || '/';
   const [isRegistering, setIsRegistering] = useState(false);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -24,20 +22,23 @@ export default function LoginPage() {
     event.preventDefault();
     clearError();
     setFormError('');
-    if (isRegistering && password !== confirmPassword) {
-      setFormError('The passwords do not match.');
+    if (name.trim().length < 2) {
+      setFormError('Please enter your name.');
+      return;
+    }
+    const digits = mobileNumber.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) {
+      setFormError('Enter a mobile number with 10 to 15 digits.');
       return;
     }
     const appUser = isRegistering
-      ? await registerUser(name, email, password)
-      : await loginUser(email, password);
+      ? await registerUser(name, digits)
+      : await loginUser(name, digits);
     if (appUser) navigate(from, { replace: true });
   };
 
   const switchMode = () => {
     setIsRegistering((value) => !value);
-    setPassword('');
-    setConfirmPassword('');
     setFormError('');
     clearError();
   };
@@ -53,7 +54,7 @@ export default function LoginPage() {
           {isRegistering ? 'CREATE ' : 'CUSTOMER '}<span className="text-[#FF4D00]">{isRegistering ? 'ACCOUNT' : 'LOGIN'}</span>
         </h1>
         <p className="mt-2 text-sm text-[#A1A1A1] leading-relaxed">
-          {isRegistering ? 'Create an account with your email and a password to book and manage orders.' : 'Sign in with your email and password to continue.'}
+          {isRegistering ? 'Create an account with your name and mobile number.' : 'Enter your name and mobile number to continue.'}
         </p>
 
         {(error || formError) && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
@@ -65,25 +66,14 @@ export default function LoginPage() {
         </motion.div>}
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4 text-left">
-          {isRegistering && <label className="block text-xs text-[#A1A1A1]">FULL NAME
+          <label className="block text-xs text-[#A1A1A1]">FULL NAME
             <input required minLength={2} maxLength={100} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)}
               className="mt-2 w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]" />
-          </label>}
-          <label className="block text-xs text-[#A1A1A1]">EMAIL ADDRESS
-            <input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)}
+          </label>
+          <label className="block text-xs text-[#A1A1A1]">MOBILE NUMBER
+            <input required type="tel" inputMode="tel" autoComplete="tel" minLength={10} maxLength={20} value={mobileNumber} onChange={(event) => setMobileNumber(event.target.value)}
               className="mt-2 w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]" />
           </label>
-          <label className="block text-xs text-[#A1A1A1]">PASSWORD
-            <input required type="password" minLength={isRegistering ? 12 : undefined} maxLength={128} autoComplete={isRegistering ? 'new-password' : 'current-password'}
-              value={password} onChange={(event) => setPassword(event.target.value)}
-              className="mt-2 w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]" />
-            {isRegistering && <span className="mt-1 block text-[11px] text-[#777]">Use at least 12 characters.</span>}
-          </label>
-          {isRegistering && <label className="block text-xs text-[#A1A1A1]">CONFIRM PASSWORD
-            <input required type="password" minLength={12} maxLength={128} autoComplete="new-password" value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              className="mt-2 w-full bg-[#050505] border border-[#252525] rounded-xl px-4 py-3.5 text-white text-sm focus:outline-none focus:border-[#FF4D00]" />
-          </label>}
           <button type="submit" disabled={loading}
             className="w-full py-4 rounded-xl bg-gradient-to-r from-[#FF4D00] to-[#FF7A00] text-white font-extrabold text-xs uppercase tracking-wider shadow-lg shadow-[#FF4D00]/30 flex items-center justify-center gap-2 disabled:opacity-50">
             {loading ? <><Loader2 className="w-4 h-4 animate-spin" />PLEASE WAIT…</> : <>{isRegistering ? 'CREATE ACCOUNT' : 'SIGN IN'} <ArrowRight className="w-4 h-4" /></>}
@@ -95,7 +85,7 @@ export default function LoginPage() {
         </button>
         <div className="mt-8 pt-4 border-t border-[#252525] text-center text-[11px] text-[#A1A1A1]/70 flex items-center justify-center gap-2">
           <ShieldCheck className="w-4 h-4 text-[#FF4D00]" />
-          <span>Passwords are stored as secure hashes.</span>
+          <span>Mobile numbers are not verified by SMS in this demo.</span>
         </div>
       </motion.div>
     </div>

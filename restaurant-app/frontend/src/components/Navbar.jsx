@@ -341,7 +341,7 @@ export default function Navbar() {
                     )}
                     <div>
                       <div className="text-sm font-bold text-white">{user.displayName}</div>
-                      <div className="text-[11px] text-[#94a3b8] truncate max-w-[180px]">{user.email}</div>
+                      <div className="text-[11px] text-[#94a3b8] truncate max-w-[180px]">{user.mobile}</div>
                     </div>
                   </div>
                 )}

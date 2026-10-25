@@ -190,32 +190,42 @@ const loginAttempts = new Map();
 const loginAttemptLimit = 8;
 const loginAttemptWindowMs = 15 * 60 * 1000;
 const isValidEmail = (email) => typeof email === 'string' && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-const safeUser = ({ id, name, email, mobile_number, photo, role }) => ({ id, name, email, mobile_number, photo, role });
+const normalizeMobile = (value) => String(value || '').replace(/\D/g, '');
+const isValidMobile = (mobile) => /^\d{10,15}$/.test(mobile);
+const safeUser = ({ id, name, email, mobile_number, photo, role }) => ({
+  id, name, email: email?.endsWith('@customer.nowait.local') ? '' : (email || ''), mobile_number, photo, role
+});
+const isLoginRateLimited = (req, identity) => {
+  const now = Date.now();
+  const attemptKey = `${req.ip}:${identity}`;
+  const attempts = (loginAttempts.get(attemptKey) || []).filter((timestamp) => now - timestamp < loginAttemptWindowMs);
+  if (attempts.length >= loginAttemptLimit) return true;
+  attempts.push(now);
+  loginAttempts.set(attemptKey, attempts);
+  return false;
+};
+const clearLoginRateLimit = (req, identity) => loginAttempts.delete(`${req.ip}:${identity}`);
 
 app.post('/api/auth/register', asyncHandler(async (req, res) => {
   const name = String(req.body.name || '').trim();
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const password = req.body.password;
-  if (name.length < 2 || name.length > 100 || !isValidEmail(email) || typeof password !== 'string' || password.length < 12 || password.length > 128) {
-    return res.status(400).json({ success: false, message: 'Enter your name, a valid email, and a password of at least 12 characters.' });
-  }
-  if (email === getConfiguredAdminEmail()) {
-    return res.status(403).json({ success: false, message: 'This email is reserved for the configured restaurant administrator.' });
+  const mobile = normalizeMobile(req.body.mobileNumber);
+  if (name.length < 2 || name.length > 100 || !isValidMobile(mobile)) {
+    return res.status(400).json({ success: false, message: 'Enter your name and a valid mobile number with 10 to 15 digits.' });
   }
 
   const db = await getDb();
-  const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = ?', [email]);
-  if (existing) return res.status(409).json({ success: false, message: 'An account with this email already exists. Please sign in.' });
+  const existing = await db.get('SELECT id FROM users WHERE mobile_number = ? AND role = \'CUSTOMER\'', [mobile]);
+  if (existing) return res.status(409).json({ success: false, message: 'An account with this mobile number already exists. Please sign in.' });
 
   const id = `user-${randomUUID()}`;
-  const passwordHash = await hashPassword(password);
+  const internalEmail = `${mobile}@customer.nowait.local`;
   try {
     await db.run(
-      "INSERT INTO users (id, name, email, password_hash, role) VALUES (?, ?, ?, ?, 'CUSTOMER')",
-      [id, name, email, passwordHash]
+      "INSERT INTO users (id, name, email, mobile_number, role) VALUES (?, ?, ?, ?, 'CUSTOMER')",
+      [id, name, internalEmail, mobile]
     );
   } catch (error) {
-    if (String(error.code || '').startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ success: false, message: 'An account with this email already exists. Please sign in.' });
+    if (String(error.code || '').startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ success: false, message: 'An account with this mobile number already exists. Please sign in.' });
     throw error;
   }
 
@@ -224,28 +234,42 @@ app.post('/api/auth/register', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/auth/login', asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const mobile = normalizeMobile(req.body.mobileNumber);
+  if (name.length < 2 || !isValidMobile(mobile)) {
+    return res.status(400).json({ success: false, message: 'Enter your name and a valid mobile number.' });
+  }
+
+  if (isLoginRateLimited(req, mobile)) {
+    return res.status(429).json({ success: false, message: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
+  }
+
+  const db = await getDb();
+  const user = await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE mobile_number = ? AND role = \'CUSTOMER\'', [mobile]);
+  if (!user || user.name.trim().toLocaleLowerCase() !== name.toLocaleLowerCase()) {
+    return res.status(401).json({ success: false, message: 'Name or mobile number is incorrect.' });
+  }
+  clearLoginRateLimit(req, mobile);
+  const publicUser = safeUser(user);
+  res.json({ success: true, data: { user: publicUser, token: createSessionToken(publicUser) } });
+}));
+
+app.post('/api/auth/admin-login', asyncHandler(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = req.body.password;
   if (!isValidEmail(email) || typeof password !== 'string' || password.length > 128) {
-    return res.status(400).json({ success: false, message: 'Enter a valid email address and password.' });
+    return res.status(400).json({ success: false, message: 'Enter the administrator email and password.' });
   }
-
-  const now = Date.now();
-  const attemptKey = `${req.ip}:${email}`;
-  const attempts = (loginAttempts.get(attemptKey) || []).filter((timestamp) => now - timestamp < loginAttemptWindowMs);
-  if (attempts.length >= loginAttemptLimit) {
+  const identity = `admin:${email}`;
+  if (isLoginRateLimited(req, identity)) {
     return res.status(429).json({ success: false, message: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
   }
-  attempts.push(now);
-  loginAttempts.set(attemptKey, attempts);
-
   const db = await getDb();
-  const user = await db.get('SELECT id, name, email, mobile_number, photo, role, password_hash FROM users WHERE LOWER(email) = ?', [email]);
-  const validPassword = await verifyPassword(password, user?.password_hash);
-  if (!user || !validPassword) {
-    return res.status(401).json({ success: false, message: 'Email or password is incorrect.' });
+  const user = await db.get('SELECT id, name, email, mobile_number, photo, role, password_hash FROM users WHERE LOWER(email) = ? AND role = \'ADMIN\'', [email]);
+  if (email !== getConfiguredAdminEmail() || !user || !(await verifyPassword(password, user.password_hash))) {
+    return res.status(401).json({ success: false, message: 'Administrator email or password is incorrect.' });
   }
-  loginAttempts.delete(attemptKey);
+  clearLoginRateLimit(req, identity);
   const publicUser = safeUser(user);
   res.json({ success: true, data: { user: publicUser, token: createSessionToken(publicUser) } });
 }));
@@ -272,19 +296,25 @@ app.patch('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
   let cleanMobile = existing.mobile_number;
   if (mobileNumber !== undefined && mobileNumber !== null && mobileNumber.trim() !== '') {
     const rawDigits = mobileNumber.replace(/[^0-9]/g, '');
-    if (rawDigits.length < 10) {
-      return res.status(400).json({ success: false, message: 'Invalid phone number. Please provide a valid 10-digit mobile number.' });
+    if (!isValidMobile(rawDigits)) {
+      return res.status(400).json({ success: false, message: 'Invalid phone number. Please provide 10 to 15 digits.' });
     }
-    cleanMobile = rawDigits.slice(-10);
+    cleanMobile = rawDigits;
   }
 
+  const duplicateMobile = await db.get('SELECT id FROM users WHERE mobile_number = ? AND id <> ?', [cleanMobile, userId]);
+  if (duplicateMobile) return res.status(409).json({ success: false, message: 'This mobile number is already linked to another account.' });
+  const internalEmail = existing.email?.endsWith('@customer.nowait.local')
+    ? `${cleanMobile}@customer.nowait.local`
+    : existing.email;
+
   await db.run(
-    `UPDATE users SET name = ?, mobile_number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-    [name ? name.trim() : existing.name, cleanMobile, userId]
+    `UPDATE users SET name = ?, mobile_number = ?, email = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [name ? name.trim() : existing.name, cleanMobile, internalEmail, userId]
   );
 
   const updatedUser = await db.get('SELECT id, name, email, mobile_number, photo, role FROM users WHERE id = ?', [userId]);
-  res.json({ success: true, message: 'Profile updated successfully.', data: updatedUser });
+  res.json({ success: true, message: 'Profile updated successfully.', data: safeUser(updatedUser) });
 }));
 
 app.get('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
@@ -299,7 +329,7 @@ app.get('/api/users/profile', authenticate, asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'User profile not found.' });
   }
 
-  res.json({ success: true, data: userRecord });
+  res.json({ success: true, data: safeUser(userRecord) });
 }));
 
 // ==================== PHASE 12: REAL-TIME TABLE AVAILABILITY APIs ====================
@@ -519,9 +549,9 @@ app.post('/api/reservations', authenticate, asyncHandler(async (req, res) => {
   const time = req.body.time;
   const leavingTime = req.body.leavingTime || req.body.leaving_time;
   const guests = req.body.guests;
-  const customerName = req.auth.claims.name || req.auth.user?.name || 'Customer';
+  const customerName = req.auth.user?.name || req.auth.claims.name || 'Customer';
   const customerEmail = req.auth.claims.email || '';
-  const customerMobile = req.body.customerMobile || req.body.customer_mobile;
+  const customerMobile = req.auth.user?.mobile_number || req.body.customerMobile || req.body.customer_mobile;
   const userId = authUserId;
 
   if (!tableId || !date || !time) {
@@ -650,7 +680,7 @@ app.post('/api/orders', authenticate, asyncHandler(async (req, res) => {
   const reservationId = req.body.reservationId || req.body.reservation_id;
   const items = req.body.items;
   const userId = getAuthUserId(req);
-  const customerName = req.auth.claims.name || req.auth.user?.name || 'Customer';
+  const customerName = req.auth.user?.name || req.auth.claims.name || 'Customer';
   const customerEmail = req.auth.claims.email;
   const customerMobile = req.auth.user?.mobile_number || '';
   const finalUserId = authUserId || userId;
@@ -952,7 +982,7 @@ app.patch('/api/orders/:id', requireAdmin, asyncHandler(async (req, res) => {
 // ==================== OWNER / ADMIN AUTHENTICATION API ====================
 app.post('/api/owner/login', (req, res) => res.status(410).json({
   success: false,
-  message: 'Use email and password sign-in at /api/auth/login.'
+  message: 'Use the administrator sign-in form at /owner/login.'
 }));
 
 // ==================== COMPREHENSIVE ADMIN MANAGEMENT APIs ====================
